@@ -7,10 +7,24 @@
 mod annot;
 mod check;
 mod prelude;
-mod tsgo;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod tsgo;
+#[cfg(target_arch = "wasm32")]
+mod tsgo {
+    pub fn receiver_type(_: &str) -> Option<String> {
+        None
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod wasm;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::fs;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
 pub use annot::{BorrowMode, FnSig, OwnDirective, OwnType};
@@ -138,11 +152,13 @@ pub fn check_source_with(filename: &str, source: &str, runtime: Runtime) -> Chec
 }
 
 /// Check a file on disk (Node prelude).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_path(path: &Path) -> io::Result<CheckResult> {
     check_path_with(path, Runtime::default())
 }
 
 /// Check a file on disk with an explicit runtime prelude.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_path_with(path: &Path, runtime: Runtime) -> io::Result<CheckResult> {
     let source = fs::read_to_string(path)?;
     let name = path.to_string_lossy().to_string();
@@ -150,11 +166,13 @@ pub fn check_path_with(path: &Path, runtime: Runtime) -> io::Result<CheckResult>
 }
 
 /// Check files and/or directories (recursively, `.js`/`.ts`/`.mjs`/`.cjs`/`.jsx`/`.tsx`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_paths(paths: &[PathBuf]) -> io::Result<CheckResult> {
     check_paths_with(paths, Runtime::default())
 }
 
 /// Like [`check_paths`], with an explicit runtime prelude.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_paths_with(paths: &[PathBuf], runtime: Runtime) -> io::Result<CheckResult> {
     let mut files = Vec::new();
     for p in paths {
@@ -168,6 +186,7 @@ pub fn check_paths_with(paths: &[PathBuf], runtime: Runtime) -> io::Result<Check
     Ok(acc)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn collect_js_ts_files(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     if path.is_dir() {
         let mut entries: Vec<_> = fs::read_dir(path)?.filter_map(|e| e.ok()).collect();
@@ -191,6 +210,7 @@ pub fn collect_js_ts_files(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn is_js_ts(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|s| s.to_str()),

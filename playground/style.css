@@ -1,0 +1,101 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a303c;
+  --text: #e7ecf3;
+  --muted: #8b95a7;
+  --accent: #e8b86d;
+  --ok: #7dcea0;
+  --err: #e07a7a;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.brand { font-weight: 650; letter-spacing: 0.02em; }
+.brand a { color: var(--accent); text-decoration: none; }
+.brand .sub { color: var(--muted); font-weight: 500; margin-left: 8px; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; }
+.controls label {
+  color: var(--muted);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+select, textarea, pre {
+  font-family: var(--mono);
+}
+select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+}
+
+main {
+  flex: 1;
+  display: grid;
+  grid-template-rows: 1fr 220px;
+  min-height: 0;
+}
+@media (min-width: 960px) {
+  main { grid-template-rows: none; grid-template-columns: 1.4fr 1fr; }
+}
+
+.editor-pane, .out-pane { min-height: 0; display: flex; flex-direction: column; }
+.editor-pane { border-right: 1px solid var(--border); }
+textarea {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: none;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+.out-pane { background: var(--panel); }
+.status {
+  padding: 8px 16px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.status.ok { color: var(--ok); }
+.status.err { color: var(--err); }
+.status.loading { color: var(--accent); }
+#out {
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+#out .diag { color: var(--err); }
+#out .empty { color: var(--ok); }

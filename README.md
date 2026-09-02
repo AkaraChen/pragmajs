@@ -141,6 +141,16 @@ cargo run -- --check examples/ok-unique-move.js    # exit 0
 cargo run -- --check examples/err-unique-forget.js # error[unique-forget]
 ```
 
+## Playground
+
+浏览器里跑同一个检查器（WASM，无服务器）：
+
+```bash
+./scripts/build-playground.sh
+# 打开 playground/index.html，或：
+cd playground && vercel --prod
+```
+
 ## 限制
 
 单文件。跨文件调用按**函数名**匹配，且被调方必须在**同一个文件里**带了注解。
