@@ -1,0 +1,9 @@
+[package]
+name = "ownershipjs"
+version = "0.1.0"
+edition = "2021"
+description = "Static ownership and borrow checker for JavaScript/TypeScript via /*#own comments"
+license = "MIT"
+
+[dependencies]
+oxc = { version = "0.148", features = ["ast_visit"] }
