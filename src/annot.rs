@@ -345,6 +345,16 @@ fn parse_borrow_directive(lx: &mut Lexer<'_>) -> Result<OwnDirective, String> {
     })
 }
 
+/// Parse a function ownership type, e.g. `(buf: unique Buffer) => void`.
+pub fn parse_fn_sig_str(src: &str) -> Result<FnSig, String> {
+    let mut lx = Lexer::new(src);
+    let sig = parse_fn_sig(&mut lx)?;
+    match lx.next_tok()? {
+        Tok::Eof | Tok::Semi => Ok(sig),
+        other => Err(format!("trailing token after function type: {other:?}")),
+    }
+}
+
 fn parse_fn_sig(lx: &mut Lexer<'_>) -> Result<FnSig, String> {
     expect(lx, Tok::LParen, "(")?;
     let mut params = Vec::new();

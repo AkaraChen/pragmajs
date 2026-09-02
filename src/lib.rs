@@ -6,12 +6,15 @@
 
 mod annot;
 mod check;
+mod prelude;
+mod tsgo;
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 pub use annot::{BorrowMode, FnSig, OwnDirective, OwnType};
+pub use prelude::Runtime;
 
 /// Kind of ownership/borrow rule that was violated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -120,23 +123,39 @@ impl CheckResult {
 }
 
 /// Check a single source string. `filename` selects JS vs TS via extension.
+/// Loads the Node builtin prelude (same as [`Runtime::Node`]).
 pub fn check_source(filename: &str, source: &str) -> CheckResult {
-    let diagnostics = check::check_source(filename, source);
+    check_source_with(filename, source, Runtime::default())
+}
+
+/// Like [`check_source`], with an explicit runtime prelude.
+pub fn check_source_with(filename: &str, source: &str, runtime: Runtime) -> CheckResult {
+    let diagnostics = check::check_source(filename, source, runtime);
     CheckResult {
         diagnostics,
         sources: vec![(filename.to_string(), source.to_string())],
     }
 }
 
-/// Check a file on disk.
+/// Check a file on disk (Node prelude).
 pub fn check_path(path: &Path) -> io::Result<CheckResult> {
+    check_path_with(path, Runtime::default())
+}
+
+/// Check a file on disk with an explicit runtime prelude.
+pub fn check_path_with(path: &Path, runtime: Runtime) -> io::Result<CheckResult> {
     let source = fs::read_to_string(path)?;
     let name = path.to_string_lossy().to_string();
-    Ok(check_source(&name, &source))
+    Ok(check_source_with(&name, &source, runtime))
 }
 
 /// Check files and/or directories (recursively, `.js`/`.ts`/`.mjs`/`.cjs`/`.jsx`/`.tsx`).
 pub fn check_paths(paths: &[PathBuf]) -> io::Result<CheckResult> {
+    check_paths_with(paths, Runtime::default())
+}
+
+/// Like [`check_paths`], with an explicit runtime prelude.
+pub fn check_paths_with(paths: &[PathBuf], runtime: Runtime) -> io::Result<CheckResult> {
     let mut files = Vec::new();
     for p in paths {
         collect_js_ts_files(p, &mut files)?;
@@ -144,7 +163,7 @@ pub fn check_paths(paths: &[PathBuf]) -> io::Result<CheckResult> {
     files.sort();
     let mut acc = CheckResult::default();
     for f in files {
-        acc.merge(check_path(&f)?);
+        acc.merge(check_path_with(&f, runtime)?);
     }
     Ok(acc)
 }

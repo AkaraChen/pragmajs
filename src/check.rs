@@ -14,7 +14,7 @@ use oxc::parser::Parser;
 use oxc::span::{GetSpan, SourceType, Span};
 use std::collections::HashMap;
 
-pub fn check_source(filename: &str, source: &str) -> Vec<Diagnostic> {
+pub fn check_source(filename: &str, source: &str, runtime: crate::Runtime) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
     let source_type = SourceType::from_path(filename).unwrap_or_else(|_| {
         if filename.ends_with(".ts") || filename.ends_with(".tsx") || filename.ends_with(".mts") {
@@ -24,10 +24,15 @@ pub fn check_source(filename: &str, source: &str) -> Vec<Diagnostic> {
         }
     });
     let ret = Parser::new(&allocator, source, source_type).parse();
-    check_program(filename, source, &ret.program)
+    check_program(filename, source, &ret.program, runtime)
 }
 
-fn check_program(path: &str, source: &str, program: &Program<'_>) -> Vec<Diagnostic> {
+fn check_program(
+    path: &str,
+    source: &str,
+    program: &Program<'_>,
+    runtime: crate::Runtime,
+) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let mut annots: HashMap<u32, Vec<AttachedOwn>> = HashMap::new();
     for comment in program.comments.iter() {
@@ -48,7 +53,7 @@ fn check_program(path: &str, source: &str, program: &Program<'_>) -> Vec<Diagnos
         path: path.to_string(),
         source,
         annots,
-        sigs: HashMap::new(),
+        sigs: crate::prelude::signatures(runtime),
     };
     file.collect_sigs_program(program);
     let mut checker = Checker {
@@ -256,6 +261,7 @@ struct VarEntry {
     owner: Option<String>,
     read_borrows: u32,
     write_borrows: u32,
+    ty_name: String,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -414,6 +420,11 @@ impl Checker<'_> {
                 }
             }
         }
+        let ty_name = self
+            .tbl
+            .get(owner)
+            .map(|e| e.ty_name.clone())
+            .unwrap_or_default();
         self.add_var(
             alias.to_string(),
             VarEntry {
@@ -424,6 +435,7 @@ impl Checker<'_> {
                 owner: Some(owner.to_string()),
                 read_borrows: 0,
                 write_borrows: 0,
+                ty_name,
             },
         );
     }
@@ -716,17 +728,18 @@ impl Checker<'_> {
                 owner: None,
                 read_borrows: 0,
                 write_borrows: 0,
+                ty_name: entry.ty_name.clone(),
             },
         );
     }
 
     fn add_from_type(&mut self, name: &str, ty: &OwnType, span: u32) {
-        let kind = match ty {
-            OwnType::Unique(_) => OwnKind::Unique,
-            OwnType::Affine(_) => OwnKind::Affine,
+        let (kind, ty_name) = match ty {
+            OwnType::Unique(s) => (OwnKind::Unique, s.clone()),
+            OwnType::Affine(s) => (OwnKind::Affine, s.clone()),
             OwnType::Copy(_) => return,
-            OwnType::RefRead(_) => OwnKind::RefRead,
-            OwnType::RefWrite(_) => OwnKind::RefWrite,
+            OwnType::RefRead(s) => (OwnKind::RefRead, s.clone()),
+            OwnType::RefWrite(s) => (OwnKind::RefWrite, s.clone()),
             OwnType::Void => return,
         };
         self.add_var(
@@ -739,6 +752,7 @@ impl Checker<'_> {
                 owner: None,
                 read_borrows: 0,
                 write_borrows: 0,
+                ty_name,
             },
         );
     }
@@ -810,6 +824,10 @@ impl Checker<'_> {
                     }
                     if let Some(kind) = src_kind {
                         if matches!(kind, OwnKind::Unique | OwnKind::Affine) {
+                            let ty_name = src_name
+                                .as_ref()
+                                .and_then(|s| self.tbl.get(s).map(|e| e.ty_name.clone()))
+                                .unwrap_or_default();
                             self.add_var(
                                 n.clone(),
                                 VarEntry {
@@ -820,6 +838,7 @@ impl Checker<'_> {
                                     owner: None,
                                     read_borrows: 0,
                                     write_borrows: 0,
+                                    ty_name,
                                 },
                             );
                             continue;
@@ -1025,8 +1044,33 @@ impl Checker<'_> {
         let Expression::CallExpression(call) = expr else {
             return None;
         };
-        let callee = ident_name(&call.callee)?;
+        if let Some((_, sig)) = self.instance_sig(call) {
+            return Some(sig.ret.clone());
+        }
+        let callee = callee_name(&call.callee)?;
         self.file.sigs.get(&callee).map(|s| s.ret.clone())
+    }
+
+    /// `buf.toString()` → prelude key `Buffer#toString` using the receiver's own type.
+    fn instance_sig(&self, call: &CallExpression<'_>) -> Option<(String, FnSig)> {
+        let Expression::StaticMemberExpression(m) = &call.callee else {
+            return None;
+        };
+        let recv = ident_name(&m.object)?;
+        let method = m.property.name.as_str();
+        let ty = self.receiver_type_name(&recv)?;
+        let key = format!("{ty}#{method}");
+        let sig = self.file.sigs.get(&key)?.clone();
+        Some((recv, sig))
+    }
+
+    fn receiver_type_name(&self, ident: &str) -> Option<String> {
+        if let Some(e) = self.tbl.get(ident) {
+            if !e.ty_name.is_empty() {
+                return Some(e.ty_name.clone());
+            }
+        }
+        crate::tsgo::receiver_type(ident)
     }
 
     fn check_unmapped_eval(&mut self, expr: &Expression<'_>) {
@@ -1352,8 +1396,28 @@ impl Checker<'_> {
     }
 
     fn count_call(&self, call: &CallExpression<'_>, name: &str) -> Apps {
+        if let Some((recv, sig)) = self.instance_sig(call) {
+            let mut apps = Apps::default();
+            if let Expression::StaticMemberExpression(m) = &call.callee {
+                if ident_name(&m.object).as_deref() != Some(name) {
+                    apps = apps.merge(self.count(&m.object, name));
+                }
+            }
+            if recv == name {
+                let mode = param_mode(sig.params.first().map(|(_, ty)| ty));
+                apps = apps.merge(self.count_arg_ident(name, mode));
+            }
+            for (i, arg) in call.arguments.iter().enumerate() {
+                let Some(expr) = arg.as_expression() else {
+                    continue;
+                };
+                let mode = self.arg_mode(expr, Some(&sig), i + 1);
+                apps = apps.merge(self.count_arg(expr, name, mode));
+            }
+            return apps;
+        }
         let mut apps = self.count(&call.callee, name);
-        let callee = ident_name(&call.callee);
+        let callee = callee_name(&call.callee);
         let sig = callee.as_ref().and_then(|n| self.file.sigs.get(n));
         for (i, arg) in call.arguments.iter().enumerate() {
             let Some(expr) = arg.as_expression() else {
@@ -1363,6 +1427,30 @@ impl Checker<'_> {
             apps = apps.merge(self.count_arg(expr, name, mode));
         }
         apps
+    }
+
+    fn count_arg_ident(&self, name: &str, mode: ArgMode) -> Apps {
+        if self.suppress_consume.as_deref() == Some(name) && mode == ArgMode::Consume {
+            return Apps::default();
+        }
+        match mode {
+            ArgMode::Consume => Apps {
+                consumed: 1,
+                ..Apps::default()
+            },
+            ArgMode::Read => Apps {
+                read: 1,
+                ..Apps::default()
+            },
+            ArgMode::Write => Apps {
+                write: 1,
+                ..Apps::default()
+            },
+            ArgMode::Path => Apps {
+                path: 1,
+                ..Apps::default()
+            },
+        }
     }
 
     fn arg_mode(&self, expr: &Expression<'_>, sig: Option<&FnSig>, i: usize) -> ArgMode {
@@ -1376,13 +1464,18 @@ impl Checker<'_> {
         }
         if let Some(sig) = sig {
             if let Some((_, ty)) = sig.params.get(i) {
+                return param_mode(Some(ty));
+            }
+            // Extra args on a known callee inherit last copy/ref mode, else Path
+            // (varargs such as console.log must not consume).
+            if let Some((_, ty)) = sig.params.last() {
                 return match ty {
                     OwnType::RefRead(_) => ArgMode::Read,
                     OwnType::RefWrite(_) => ArgMode::Write,
-                    OwnType::Copy(_) => ArgMode::Path,
-                    _ => ArgMode::Consume,
+                    _ => ArgMode::Path,
                 };
             }
+            return ArgMode::Path;
         }
         ArgMode::Consume
     }
@@ -1532,12 +1625,22 @@ impl Checker<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ArgMode {
     Consume,
     Read,
     Write,
     Path,
+}
+
+fn param_mode(ty: Option<&OwnType>) -> ArgMode {
+    match ty {
+        Some(OwnType::RefRead(_)) => ArgMode::Read,
+        Some(OwnType::RefWrite(_)) => ArgMode::Write,
+        Some(OwnType::Copy(_)) => ArgMode::Path,
+        Some(_) => ArgMode::Consume,
+        None => ArgMode::Consume,
+    }
 }
 
 fn ident_of_pattern(pat: &BindingPattern<'_>) -> Option<String> {
@@ -1550,6 +1653,22 @@ fn ident_name(expr: &Expression<'_>) -> Option<String> {
         Expression::ParenthesizedExpression(p) => ident_name(&p.expression),
         Expression::TSAsExpression(e) => ident_name(&e.expression),
         Expression::TSNonNullExpression(e) => ident_name(&e.expression),
+        _ => None,
+    }
+}
+
+/// Dotted callee such as `fs.readFile` / `Buffer.from` / `Deno.readFile`.
+fn callee_name(expr: &Expression<'_>) -> Option<String> {
+    match expr {
+        Expression::Identifier(id) => Some(id.name.as_str().to_string()),
+        Expression::ParenthesizedExpression(p) => callee_name(&p.expression),
+        Expression::TSAsExpression(e) => callee_name(&e.expression),
+        Expression::TSNonNullExpression(e) => callee_name(&e.expression),
+        Expression::TSSatisfiesExpression(e) => callee_name(&e.expression),
+        Expression::StaticMemberExpression(m) => {
+            let obj = callee_name(&m.object)?;
+            Some(format!("{}.{}", obj, m.property.name.as_str()))
+        }
         _ => None,
     }
 }

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ownershipjs::{check_paths, check_source, RuleKind};
+use ownershipjs::{check_paths, check_source, check_source_with, RuleKind, Runtime};
 
 fn kinds(src: &str) -> Vec<RuleKind> {
     check_source("test.js", src).kinds()
@@ -363,6 +363,7 @@ fn examples_directory_via_shipped_check_paths() {
         ),
         ("err-overlapping-mut.js", RuleKind::MutBorrowConflict),
         ("err-readonly-mut-conflict.js", RuleKind::MutBorrowConflict),
+        ("err-prelude-buffer-forget.js", RuleKind::UniqueForget),
     ];
 
     for (file, kind) in expected_err {
@@ -385,6 +386,9 @@ fn examples_directory_via_shipped_check_paths() {
         "ok-clone.js",
         "ok-branch-consume.js",
         "ok-create-in-loop.js",
+        "ok-prelude-console.js",
+        "ok-prelude-buffer-tostring.js",
+        "ok-prelude-handle-close.js",
     ];
     for file in ok_files {
         let got = by_file.get(file).cloned().unwrap_or_default();
@@ -398,5 +402,265 @@ fn examples_directory_via_shipped_check_paths() {
     assert!(
         dir.join("ok-copy.ts").is_file(),
         "TypeScript copy example must exist"
+    );
+}
+
+#[test]
+fn node_prelude_copy_does_not_consume() {
+    let src = r#"
+/*#own type: (buf: unique Buffer) => void */
+function consume(buf) { void buf; }
+/*#own type: (buf: unique Buffer) => void */
+function process(buf) {
+  console.log(buf, "x");
+  consume(buf);
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.diagnostics.is_empty(),
+        "default node should not consume via console.log: {:?}",
+        node.formatted_lines()
+    );
+    let none = check_source_with("test.js", src, Runtime::None);
+    assert!(
+        none.kinds().contains(&RuleKind::UseAfterMove),
+        "prelude none should consume unknown callee args: {:?}",
+        none.formatted_lines()
+    );
+}
+
+#[test]
+fn node_prelude_readonly_does_not_consume() {
+    let src = r#"
+/*#own type: (buf: unique Buffer) => void */
+function consume(buf) { void buf; }
+/*#own type: (a: unique Buffer, b: unique Buffer) => void */
+function process(a, b) {
+  Buffer.compare(a, b);
+  consume(a);
+  consume(b);
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.diagnostics.is_empty(),
+        "Buffer.compare is &readonly: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn node_prelude_unique_param_moves() {
+    let src = r#"
+/*#own type: (fd: unique Fd) => void */
+function process(fd) {
+  fs.closeSync(fd);
+  void fd;
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.kinds().contains(&RuleKind::UseAfterMove),
+        "fs.closeSync should move unique Fd: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn none_does_not_apply_prelude_return() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const buf = Buffer.from("x");
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.kinds().contains(&RuleKind::UniqueForget),
+        "node Buffer.from returns unique: {:?}",
+        node.formatted_lines()
+    );
+    let none = check_source_with("test.js", src, Runtime::None);
+    assert!(
+        !none.kinds().contains(&RuleKind::UniqueForget),
+        "none must not treat Buffer.from as annotated: {:?}",
+        none.formatted_lines()
+    );
+}
+
+#[test]
+fn bun_only_name_resolves_under_bun() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const f = Bun.file("x");
+}
+"#;
+    let bun = check_source_with("test.js", src, Runtime::Bun);
+    assert!(
+        bun.kinds().contains(&RuleKind::UniqueForget),
+        "Bun.file returns unique under bun: {:?}",
+        bun.formatted_lines()
+    );
+    let node = check_source_with("test.js", src, Runtime::Node);
+    assert!(
+        !node.kinds().contains(&RuleKind::UniqueForget),
+        "Bun.file is absent from node: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn deno_only_name_resolves_under_deno() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const f = Deno.readFile("x");
+}
+"#;
+    let deno = check_source_with("test.js", src, Runtime::Deno);
+    assert!(
+        deno.kinds().contains(&RuleKind::UniqueForget),
+        "Deno.readFile returns unique under deno: {:?}",
+        deno.formatted_lines()
+    );
+    let node = check_source_with("test.js", src, Runtime::Node);
+    assert!(
+        !node.kinds().contains(&RuleKind::UniqueForget),
+        "Deno.readFile is absent from node: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn instance_method_readonly_does_not_consume() {
+    let src = r#"
+/*#own type: (buf: unique Buffer) => void */
+function consume(buf) { void buf; }
+/*#own type: (buf: unique Buffer) => void */
+function process(buf) {
+  buf.toString();
+  consume(buf);
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.diagnostics.is_empty(),
+        "Buffer#toString is &readonly this: {:?}",
+        node.formatted_lines()
+    );
+    let none = check_source_with("test.js", src, Runtime::None);
+    assert!(
+        none.diagnostics.is_empty(),
+        "unknown instance calls are path reads, still not a prelude hit: {:?}",
+        none.formatted_lines()
+    );
+}
+
+#[test]
+fn instance_method_unique_this_moves() {
+    let src = r#"
+/*#own type: (fh: unique FileHandle) => void */
+function process(fh) {
+  fh.close();
+  void fh;
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.kinds().contains(&RuleKind::UseAfterMove),
+        "FileHandle#close should move: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn bun_instance_method_only_under_bun() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const f = Bun.file("x");
+  f.text();
+}
+"#;
+    let bun = check_source_with("test.js", src, Runtime::Bun);
+    assert!(
+        bun.kinds().contains(&RuleKind::UniqueForget),
+        "BunFile stays unique after #text: {:?}",
+        bun.formatted_lines()
+    );
+    let node = check_source_with("test.js", src, Runtime::Node);
+    assert!(
+        !node.kinds().contains(&RuleKind::UniqueForget)
+            || node.formatted_lines().iter().any(|l| l.contains("use-after-move")),
+        "Bun.file is not a node prelude unique-return: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn deno_instance_method_only_under_deno() {
+    let src = r#"
+/*#own type: (f: unique FsFile) => void */
+function process(f) {
+  f.close();
+}
+"#;
+    let deno = check_source_with("test.js", src, Runtime::Deno);
+    assert!(
+        !deno.kinds().contains(&RuleKind::UniqueForget),
+        "FsFile#close consumes under deno: {:?}",
+        deno.formatted_lines()
+    );
+    let node = check_source_with("test.js", src, Runtime::Node);
+    assert!(
+        node.kinds().contains(&RuleKind::UniqueForget),
+        "node has no FsFile#close so close is a path read: {:?}",
+        node.formatted_lines()
+    );
+}
+
+#[test]
+fn child_process_spawn_hits_prelude() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const p = child_process.spawn("x");
+}
+"#;
+    let node = check_source("test.js", src);
+    assert!(
+        node.kinds().contains(&RuleKind::UniqueForget),
+        "child_process.spawn (underscore) must hit the node prelude: {:?}",
+        node.formatted_lines()
+    );
+    let none = check_source_with("test.js", src, Runtime::None);
+    assert!(
+        !none.kinds().contains(&RuleKind::UniqueForget),
+        "none must not treat child_process.spawn as annotated: {:?}",
+        none.formatted_lines()
+    );
+}
+
+#[test]
+fn fs_alias_and_dotted_callee() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const a = fs.readFile("x");
+  const b = readFile("y");
+}
+"#;
+    let node = check_source("test.js", src);
+    let forgets = node
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == RuleKind::UniqueForget)
+        .count();
+    assert_eq!(
+        forgets, 2,
+        "both fs.readFile and readFile alias return unique: {:?}",
+        node.formatted_lines()
     );
 }

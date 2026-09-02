@@ -147,11 +147,55 @@ Examples under `examples/` are JS/TS adaptations of Austral
 `006-linearity` / `007-borrowing` ideas (forget, double consume, branch
 agreement, loop depth, `&` / `&mut`, region lifetime, Free/Clone).
 
+## Runtime builtin prelude
+
+Each check loads a **prelude** of `/*#own`-compatible signatures for that
+runtime’s builtins. The user file does not re-annotate `console.log`,
+`fs.readFile`, `Buffer.from`, `Deno.readFile`, `Bun.file`, and the rest of
+the high-use set.
+
+Selector (CLI `--runtime` / `-r`, library [`Runtime`](../src/prelude.rs)):
+
+| Value | What is loaded |
+| --- | --- |
+| `node` (default) | Node builtins from `preludes/node.own` (inventory: `@types/node`) |
+| `bun` | Node prelude **plus** Bun-only names from `preludes/bun.own` (`bun-types`) |
+| `deno` | Deno namespace + shared web globals from `preludes/deno.own` (`lib.deno.ns.d.ts`) |
+| `none` | Empty. Builtins behave as unknown callees. |
+
+Ownership kinds are assigned by heuristic (the `.d.ts` packages have no
+`unique` / `affine` / `&mut`). The inventory of distinct callables — module
+functions **and** instance methods — is taken from Corsa/tsgo via
+[corsa-bind](https://github.com/ubugeeei-prod/corsa-bind) (`scripts/gen-prelude.cjs`).
+Overloads of the same JS name collapse to one row. Names Corsa cannot express
+as an identifier callee (construct signatures, symbol members) go in the
+stop-report, not the prelude.
+
+Callee lookup is the dotted member path (`fs.readFile`, `Buffer.from`,
+`Deno.readFile`, `Bun.file`) **or**, for instance calls `buf.toString()`,
+`{ReceiverType}#{method}` using the type stored on the `/*#own` binding
+(`Buffer#toString`, `FileHandle#close`). If that type is missing, the checker
+tries a Corsa/tsgo binary (`TSGO` / `CORSA_BIN`); without a program, Corsa
+cannot recover a stdlib type for a bare identifier, so those calls stay
+unknown. For the Node set, last-segment aliases of `fs.*` (except
+`fs.promises.*`) are also registered (`readFile` → `fs.readFile`).
+File-level `/*#own type:` signatures overwrite the prelude.
+
+A prelude `copy` or `&readonly`/`&mut` parameter does **not** consume a
+unique/affine owner. A `unique`/`affine` parameter still moves. Extra
+arguments on a known copy-style callee (e.g. `console.log(a, b)`) inherit
+the last copy/ref mode and do not consume.
+
+Switching runtimes changes which names exist: `Bun.file` is absent from
+`node`; `Deno.readFile` is absent from `node` and `bun`. With `none`,
+`console.log(buf)` is an unknown call and consumes `buf`.
+
 ## Soundness assumptions and limits
 
 Single-file static checking. Cross-file calls match **by function name**
-when the callee is annotated in the same file; otherwise identifier
-arguments to unknown callees are treated as consumes (conservative).
+when the callee is annotated in the same file. Unknown callees (including
+builtins when `--runtime none`) treat identifier arguments as consumes
+(conservative). Prelude names are known callees for the selected runtime.
 
 The following JS constructs are **not mapped** from Austral linearity and
 are reported as `unmapped` rather than silently accepted:
