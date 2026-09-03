@@ -24,30 +24,6 @@ impl OwnType {
             OwnType::Void => "void",
         }
     }
-
-    pub fn is_linear(&self) -> bool {
-        matches!(self, OwnType::Unique(_) | OwnType::Affine(_))
-    }
-
-    pub fn is_unique(&self) -> bool {
-        matches!(self, OwnType::Unique(_))
-    }
-
-    pub fn is_copy(&self) -> bool {
-        matches!(self, OwnType::Copy(_))
-    }
-
-    pub fn is_ref(&self) -> bool {
-        matches!(self, OwnType::RefRead(_) | OwnType::RefWrite(_))
-    }
-
-    pub fn is_mut_ref(&self) -> bool {
-        matches!(self, OwnType::RefWrite(_))
-    }
-
-    pub fn is_read_ref(&self) -> bool {
-        matches!(self, OwnType::RefRead(_))
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,31 +55,18 @@ pub enum OwnDirective {
 
 #[derive(Debug, Clone)]
 pub struct AttachedOwn {
-    #[allow(dead_code)]
-    pub attached_to: u32,
-    #[allow(dead_code)]
-    pub span_start: u32,
-    #[allow(dead_code)]
-    pub span_end: u32,
     pub directives: Vec<OwnDirective>,
 }
 
 pub fn parse_own_comment(
     path: &str,
-    attached_to: u32,
     span_start: u32,
-    span_end: u32,
     content: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<AttachedOwn> {
     let body = strip_own_prefix(content)?;
     match parse_directives(&body) {
-        Ok(directives) if !directives.is_empty() => Some(AttachedOwn {
-            attached_to,
-            span_start,
-            span_end,
-            directives,
-        }),
+        Ok(directives) if !directives.is_empty() => Some(AttachedOwn { directives }),
         Ok(_) => None,
         Err(msg) => {
             diags.push(Diagnostic {
@@ -447,8 +410,6 @@ mod tests {
         let a = parse_own_comment(
             "t.js",
             0,
-            0,
-            10,
             "#own\n * type: (buf: unique Buffer) => void\n",
             &mut diags,
         )
@@ -467,7 +428,7 @@ mod tests {
     #[test]
     fn parse_shorthand_and_borrow() {
         let mut d = Vec::new();
-        let a = parse_own_comment("t.js", 0, 0, 10, "#own &readonly", &mut d).unwrap();
+        let a = parse_own_comment("t.js", 0, "#own &readonly", &mut d).unwrap();
         assert!(matches!(
             a.directives[0],
             OwnDirective::Shorthand(BorrowMode::Read)
@@ -475,8 +436,6 @@ mod tests {
         let a = parse_own_comment(
             "t.js",
             0,
-            0,
-            10,
             "#own borrow buf as view: &readonly Buffer",
             &mut d,
         )

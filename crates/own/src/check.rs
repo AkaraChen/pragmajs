@@ -11,7 +11,7 @@ use oxc::ast::ast::{
     VariableDeclaration,
 };
 use oxc::parser::Parser;
-use oxc::span::{GetSpan, SourceType, Span};
+use oxc::span::{GetSpan, SourceType};
 use std::collections::{HashMap, HashSet};
 
 pub fn check_source(filename: &str, source: &str, runtime: crate::Runtime) -> Vec<Diagnostic> {
@@ -37,14 +37,7 @@ fn check_program(
     let mut annots: HashMap<u32, Vec<AttachedOwn>> = HashMap::new();
     for comment in program.comments.iter() {
         let content = comment.content_span().source_text(source);
-        if let Some(att) = parse_own_comment(
-            path,
-            comment.attached_to,
-            comment.span.start,
-            comment.span.end,
-            content,
-            &mut diags,
-        ) {
+        if let Some(att) = parse_own_comment(path, comment.span.start, content, &mut diags) {
             annots.entry(comment.attached_to).or_default().push(att);
         }
     }
@@ -1314,7 +1307,7 @@ impl FileCtx<'_> {
             }
             BindingPattern::ArrayPattern(a) => {
                 self.collect_binding_defaults(pat);
-                self.collect_array_pattern_methods(a, init);
+                self.collect_array_pattern_methods_from(a, 0, init);
             }
             BindingPattern::ObjectPattern(o) => {
                 self.collect_binding_defaults(pat);
@@ -1414,7 +1407,7 @@ impl FileCtx<'_> {
             }
             oxc::ast::ast::AssignmentTarget::ArrayAssignmentTarget(a) => {
                 self.collect_assignment_defaults(t);
-                self.collect_array_assignment_methods(a, init);
+                self.collect_array_assignment_methods_from(a, 0, init);
             }
             oxc::ast::ast::AssignmentTarget::ObjectAssignmentTarget(o) => {
                 self.collect_assignment_defaults(t);
@@ -1543,14 +1536,6 @@ impl FileCtx<'_> {
         }
     }
 
-    fn collect_array_pattern_methods(
-        &mut self,
-        a: &oxc::ast::ast::ArrayPattern<'_>,
-        init: &Expression<'_>,
-    ) {
-        self.collect_array_pattern_methods_from(a, 0, init);
-    }
-
     fn collect_array_pattern_methods_from(
         &mut self,
         a: &oxc::ast::ast::ArrayPattern<'_>,
@@ -1668,17 +1653,9 @@ impl FileCtx<'_> {
                 self.collect_rest_from_flat(&a.left, flat);
             }
             BindingPattern::ObjectPattern(o) => {
-                self.collect_object_pattern_from_flat(o, flat);
+                self.collect_object_pattern_from_flat_at(o, flat, 0);
             }
         }
-    }
-
-    fn collect_object_pattern_from_flat(
-        &mut self,
-        o: &oxc::ast::ast::ObjectPattern<'_>,
-        flat: &[FlatArrayEl<'_>],
-    ) {
-        self.collect_object_pattern_from_flat_at(o, flat, 0);
     }
 
     fn collect_object_pattern_from_flat_at(
@@ -1778,7 +1755,7 @@ impl FileCtx<'_> {
             Expression::ArrayExpression(arr) => {
                 let mut flat = Vec::new();
                 flatten_array_elements(&arr.elements, &mut flat);
-                self.collect_object_pattern_from_flat(o, &flat);
+                self.collect_object_pattern_from_flat_at(o, &flat, 0);
             }
             Expression::ObjectExpression(obj) => {
                 for bp in &o.properties {
@@ -1829,14 +1806,6 @@ impl FileCtx<'_> {
             }
             _ => {}
         }
-    }
-
-    fn collect_array_assignment_methods(
-        &mut self,
-        a: &oxc::ast::ast::ArrayAssignmentTarget<'_>,
-        init: &Expression<'_>,
-    ) {
-        self.collect_array_assignment_methods_from(a, 0, init);
     }
 
     fn collect_array_assignment_methods_from(
@@ -1956,18 +1925,10 @@ impl FileCtx<'_> {
                 self.collect_array_assignment_from_flat(inner, 0, flat);
             }
             oxc::ast::ast::AssignmentTarget::ObjectAssignmentTarget(o) => {
-                self.collect_object_assignment_from_flat(o, flat);
+                self.collect_object_assignment_from_flat_at(o, flat, 0);
             }
             _ => {}
         }
-    }
-
-    fn collect_object_assignment_from_flat(
-        &mut self,
-        o: &oxc::ast::ast::ObjectAssignmentTarget<'_>,
-        flat: &[FlatArrayEl<'_>],
-    ) {
-        self.collect_object_assignment_from_flat_at(o, flat, 0);
     }
 
     fn collect_object_assignment_from_flat_at(
@@ -2076,7 +2037,7 @@ impl FileCtx<'_> {
             Expression::ArrayExpression(arr) => {
                 let mut flat = Vec::new();
                 flatten_array_elements(&arr.elements, &mut flat);
-                self.collect_object_assignment_from_flat(o, &flat);
+                self.collect_object_assignment_from_flat_at(o, &flat, 0);
             }
             Expression::ObjectExpression(obj) => {
                 for p in &o.properties {
@@ -2193,8 +2154,6 @@ impl FileCtx<'_> {
 enum OwnKind {
     Unique,
     Affine,
-    #[allow(dead_code)]
-    Copy,
     RefRead,
     RefWrite,
 }
@@ -4096,7 +4055,7 @@ impl Checker<'_> {
                 return Some(e.ty_name.clone());
             }
         }
-        crate::tsgo::receiver_type(ident)
+        None
     }
 
     fn check_unmapped_eval(&mut self, expr: &Expression<'_>) {
@@ -5273,9 +5232,6 @@ impl Checker<'_> {
         let Some(entry) = self.tbl.get(name).cloned() else {
             return;
         };
-        if matches!(entry.kind, OwnKind::Copy) {
-            return;
-        }
         if matches!(entry.kind, OwnKind::RefRead | OwnKind::RefWrite) {
             if apps.consumed > 0 {
                 if let Some(owner) = entry.owner.clone() {
@@ -6958,14 +6914,4 @@ fn strip_global_prefix(name: &str) -> String {
         }
     }
     name.to_string()
-}
-
-#[allow(dead_code)]
-fn _span(s: Span) -> u32 {
-    s.start
-}
-
-#[allow(dead_code)]
-fn _void(op: UnaryOperator) -> bool {
-    matches!(op, UnaryOperator::Void)
 }

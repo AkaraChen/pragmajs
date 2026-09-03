@@ -8,15 +8,6 @@ mod annot;
 mod check;
 mod prelude;
 
-#[cfg(not(target_arch = "wasm32"))]
-mod tsgo;
-#[cfg(target_arch = "wasm32")]
-mod tsgo {
-    pub fn receiver_type(_: &str) -> Option<String> {
-        None
-    }
-}
-
 #[cfg(target_arch = "wasm32")]
 mod wasm;
 
@@ -64,12 +55,6 @@ impl RuleKind {
     }
 }
 
-impl std::fmt::Display for RuleKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.slug())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub path: String,
@@ -104,12 +89,8 @@ pub struct CheckResult {
 }
 
 impl CheckResult {
-    pub fn has_errors(&self) -> bool {
-        !self.diagnostics.is_empty()
-    }
-
     pub fn failed(&self) -> bool {
-        self.has_errors()
+        !self.diagnostics.is_empty()
     }
 
     pub fn kinds(&self) -> Vec<RuleKind> {
@@ -151,12 +132,6 @@ pub fn check_source_with(filename: &str, source: &str, runtime: Runtime) -> Chec
     }
 }
 
-/// Check a file on disk (Node prelude).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn check_path(path: &Path) -> io::Result<CheckResult> {
-    check_path_with(path, Runtime::default())
-}
-
 /// Check a file on disk with an explicit runtime prelude.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn check_path_with(path: &Path, runtime: Runtime) -> io::Result<CheckResult> {
@@ -187,7 +162,7 @@ pub fn check_paths_with(paths: &[PathBuf], runtime: Runtime) -> io::Result<Check
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn collect_js_ts_files(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
+fn collect_js_ts_files(path: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
     if path.is_dir() {
         let mut entries: Vec<_> = fs::read_dir(path)?.filter_map(|e| e.ok()).collect();
         entries.sort_by_key(|e| e.path());

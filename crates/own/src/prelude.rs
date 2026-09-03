@@ -27,15 +27,6 @@ impl Runtime {
             _ => None,
         }
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Runtime::Node => "node",
-            Runtime::Bun => "bun",
-            Runtime::Deno => "deno",
-            Runtime::None => "none",
-        }
-    }
 }
 
 const NODE_OWN: &str = include_str!("../preludes/node.own");

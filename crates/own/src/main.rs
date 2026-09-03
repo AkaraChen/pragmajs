@@ -7,11 +7,10 @@ use pragma_own::Runtime;
 fn main() {
     let mut args = env::args().skip(1);
     let mut paths: Vec<PathBuf> = Vec::new();
-    let mut saw_check = false;
     let mut runtime = Runtime::default();
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--check" | "-c" => saw_check = true,
+            "--check" | "-c" => {}
             "--help" | "-h" => {
                 print_help();
                 return;
@@ -25,18 +24,25 @@ fn main() {
                     eprintln!("error: --runtime needs node, bun, deno, or none");
                     process::exit(2);
                 };
-                runtime = parse_runtime(&v);
+                runtime = Runtime::parse(&v).unwrap_or_else(|| {
+                    eprintln!("error: unknown runtime `{v}` (expected node, bun, deno, or none)");
+                    process::exit(2);
+                });
             }
             other => {
                 if let Some(v) = other.strip_prefix("--runtime=") {
-                    runtime = parse_runtime(v);
+                    runtime = Runtime::parse(v).unwrap_or_else(|| {
+                        eprintln!(
+                            "error: unknown runtime `{v}` (expected node, bun, deno, or none)"
+                        );
+                        process::exit(2);
+                    });
                 } else {
                     paths.push(PathBuf::from(other));
                 }
             }
         }
     }
-    let _ = saw_check;
     if paths.is_empty() {
         eprintln!("usage: pragma-own --check [--runtime node|bun|deno|none] <file-or-dir>");
         process::exit(2);
@@ -52,16 +58,6 @@ fn main() {
         }
         Err(e) => {
             eprintln!("error: {e}");
-            process::exit(2);
-        }
-    }
-}
-
-fn parse_runtime(v: &str) -> Runtime {
-    match Runtime::parse(v) {
-        Some(r) => r,
-        None => {
-            eprintln!("error: unknown runtime `{v}` (expected node, bun, deno, or none)");
             process::exit(2);
         }
     }
