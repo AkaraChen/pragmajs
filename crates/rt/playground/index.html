@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>refinejs playground</title>
+    <meta
+      name="description"
+      content="Browse refinejs flux fixtures with precomputed checker results."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="mast">
+        <button type="button" class="menu" id="menu" aria-label="Toggle case list">
+          Cases
+        </button>
+        <div class="brand">
+          <p class="kicker">pragma-rt</p>
+          <h1>Playground</h1>
+        </div>
+        <p class="lede">
+          Flux-style JavaScript cases. Checker output is a snapshot of
+          <code>pragma-rt check --target ecmascript</code> — Z3 does not run in
+          the browser.
+        </p>
+        <nav class="docs">
+          <a href="https://github.com/AkaraChen/pragmajs">repo</a>
+          <a href="https://github.com/AkaraChen/pragmajs/blob/master/crates/rt/docs/flux-rs-porting.md">porting rules</a>
+          <a href="https://github.com/AkaraChen/pragmajs/blob/master/crates/rt/docs/indexed-types-and-liquid-inference.md">indexed types</a>
+        </nav>
+      </header>
+
+      <aside class="rail" id="rail">
+        <div class="filters">
+          <label class="search">
+            <span>Search</span>
+            <input
+              id="q"
+              type="search"
+              placeholder="min-index, DenseArray, scrape…"
+              autocomplete="off"
+            />
+          </label>
+          <fieldset>
+            <legend>Polarity</legend>
+            <label><input type="radio" name="polarity" value="all" checked /> all</label>
+            <label><input type="radio" name="polarity" value="positive" /> positive</label>
+            <label><input type="radio" name="polarity" value="negative" /> negative</label>
+          </fieldset>
+          <fieldset>
+            <legend>Origin</legend>
+            <label><input type="radio" name="origin" value="all" checked /> all</label>
+            <label><input type="radio" name="origin" value="flux-rs" /> flux-rs port</label>
+            <label><input type="radio" name="origin" value="refinejs" /> refinejs native</label>
+          </fieldset>
+          <p class="stats" id="stats"></p>
+        </div>
+        <nav class="list" id="list" aria-label="Cases"></nav>
+      </aside>
+
+      <main class="stage" id="stage">
+        <p class="empty">Loading catalog…</p>
+      </main>
+    </div>
+    <div class="scrim" id="scrim" hidden></div>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

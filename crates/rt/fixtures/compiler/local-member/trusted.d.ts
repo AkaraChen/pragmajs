@@ -1,0 +1,3 @@
+interface ExternalBox {
+  lied(): number;
+}

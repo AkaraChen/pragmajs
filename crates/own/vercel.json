@@ -1,5 +1,5 @@
 {
   "installCommand": "true",
   "buildCommand": "true",
-  "outputDirectory": "crates/own/playground"
+  "outputDirectory": "playground"
 }

@@ -1,0 +1,20 @@
+[package]
+name = "pragma-own"
+version = "0.1.0"
+edition = "2021"
+description = "Static ownership and borrow checker for JavaScript/TypeScript via /*#own comments"
+license = "MIT"
+
+[[bin]]
+name = "pragma-own"
+path = "src/main.rs"
+
+[lib]
+name = "pragma_own"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+oxc = { version = "0.148", features = ["ast_visit"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.127"

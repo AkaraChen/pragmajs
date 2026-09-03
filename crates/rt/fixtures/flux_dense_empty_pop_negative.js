@@ -1,0 +1,2 @@
+const xs = [];
+xs.pop();

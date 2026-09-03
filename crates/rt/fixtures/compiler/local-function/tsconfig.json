@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "lib": ["ES2025"],
+    "module": "ESNext",
+    "noEmit": true,
+    "strict": true,
+    "target": "ES2025",
+    "types": []
+  },
+  "files": ["lied.js"]
+}
