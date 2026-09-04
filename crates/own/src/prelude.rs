@@ -130,6 +130,7 @@ fn names(runtime: Runtime) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::annot::OwnType;
 
     #[test]
     fn node_prelude_has_real_builtins() {
@@ -172,5 +173,32 @@ mod tests {
         }
         assert!(bun.iter().any(|s| s == "BunFile#text"));
         assert!(deno.iter().any(|s| s == "FsFile#close"));
+    }
+
+    #[test]
+    fn callback_read_file_correction_propagates_to_aliases_and_bun() {
+        for runtime in [Runtime::Node, Runtime::Bun] {
+            let sigs = signatures(runtime);
+            for callback_name in ["fs.readFile", "readFile"] {
+                assert_eq!(
+                    sigs.get(callback_name).map(|sig| &sig.ret),
+                    Some(&OwnType::Void),
+                    "{callback_name} must return void under {runtime:?}"
+                );
+            }
+            for owned_name in [
+                "fs.promises.readFile",
+                "fs.readFileSync",
+                "readFileSync",
+            ] {
+                assert!(
+                    matches!(
+                        sigs.get(owned_name).map(|sig| &sig.ret),
+                        Some(OwnType::Unique(_))
+                    ),
+                    "{owned_name} must retain its owned return under {runtime:?}"
+                );
+            }
+        }
     }
 }

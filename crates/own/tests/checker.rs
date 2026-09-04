@@ -941,8 +941,9 @@ fn fs_alias_and_dotted_callee() {
     let src = r#"
 /*#own type: () => void */
 function main() {
-  const a = fs.readFile("x");
-  const b = readFile("y");
+  const a = fs.promises.readFile("x");
+  const b = fs.readFileSync("y");
+  const c = readFileSync("z");
 }
 "#;
     let node = check_source("test.js", src);
@@ -952,8 +953,8 @@ function main() {
         .filter(|d| d.kind == RuleKind::UniqueForget)
         .count();
     assert_eq!(
-        forgets, 2,
-        "both fs.readFile and readFile alias return unique: {:?}",
+        forgets, 3,
+        "promise, sync, and bare sync alias reads return owned values: {:?}",
         node.formatted_lines()
     );
 }
@@ -1322,10 +1323,30 @@ function main() {
 "#;
     let node = check_source("test.js", src);
     assert!(
-        !node.kinds().contains(&RuleKind::UniqueForget),
+        node.diagnostics.is_empty(),
         "callback-form fs.readFile as statement: {:?}",
         node.formatted_lines()
     );
+}
+
+#[test]
+fn fs_readfile_callback_result_is_void_when_bound() {
+    let src = r#"
+/*#own type: () => void */
+function main() {
+  const dotted = fs.readFile("x", () => {});
+  const alias = readFile("y", () => {});
+  console.log(dotted, alias);
+}
+"#;
+    for runtime in [Runtime::Node, Runtime::Bun] {
+        let result = check_source_with("test.js", src, runtime);
+        assert!(
+            result.diagnostics.is_empty(),
+            "callback readFile result is void under {runtime:?}: {:?}",
+            result.formatted_lines()
+        );
+    }
 }
 
 #[test]

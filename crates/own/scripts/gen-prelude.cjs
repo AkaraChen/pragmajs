@@ -28,6 +28,14 @@ const CONSUME_SELF = /^(close|destroy|releaseLock|free)$/;
 const MUT_SELF =
   /^(write|fill|copy|end|cork|uncork|pause|resume|setEncoding|swap16|swap32|swap64|copyWithin|sort|reverse|set|push|unshift|shift|pop|splice|appendFile|truncate|chmod|chown|utimes|writeFile|writev|sync|datasync)$/;
 
+// The `.own` format intentionally stores one signature per callable. Corsa's
+// overload collapse prefers an owned return, but Node's callback-only
+// `fs.readFile` overloads all return void. Promise and sync forms have their
+// own stable names and retain their generated owned returns.
+const KNOWN_RETURN_KINDS = new Map([
+  ["fs.readFile", "void"],
+]);
+
 function isIdent(s) {
   return typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s);
 }
@@ -586,7 +594,7 @@ function rewriteOwnLine(line, instanceThis) {
         || null;
     }
   }
-  const newRet = rewriteRetKind(retSrc, thisOwn, meth);
+  const newRet = KNOWN_RETURN_KINDS.get(name) || rewriteRetKind(retSrc, thisOwn, meth);
   return `${name} (${newParams.join(", ")}) => ${newRet}`;
 }
 

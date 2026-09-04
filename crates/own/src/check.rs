@@ -4169,7 +4169,6 @@ impl Checker<'_> {
         if self.features.move_tracking
             && self.features.exact_once
             && matches!(self.call_return_type(expr), Some(OwnType::Unique(_)))
-            && !is_fs_readfile_callback(expr)
         {
             let offset = expr.span().start;
             let msg = "unique value discarded without being bound or consumed";
@@ -7493,35 +7492,6 @@ fn as_call<'a, 'b>(expr: &'b Expression<'a>) -> Option<&'b CallExpression<'a>> {
         Expression::AssignmentExpression(a) => as_call(&a.right),
         _ => None,
     }
-}
-
-fn call_has_function_arg(expr: &Expression<'_>) -> bool {
-    let Some(call) = as_call(expr) else {
-        return false;
-    };
-    call.arguments.iter().any(|a| {
-        a.as_expression()
-            .map(|e| {
-                matches!(
-                    peel(e),
-                    Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
-                )
-            })
-            .unwrap_or(false)
-    })
-}
-
-fn is_fs_readfile_callback(expr: &Expression<'_>) -> bool {
-    let Some(call) = as_call(expr) else {
-        return false;
-    };
-    let Some(name) = callee_name(&call.callee) else {
-        return false;
-    };
-    if name != "fs.readFile" && name != "readFile" {
-        return false;
-    }
-    call_has_function_arg(expr)
 }
 
 fn case_falls_through(case: &oxc::ast::ast::SwitchCase<'_>) -> bool {

@@ -6785,7 +6785,7 @@ fs.promises.utimes (path: copy PathLike, atime: copy TimeLike, mtime: copy TimeL
 fs.promises.watch (filename: copy PathLike, options: copy buffer) => copy AsyncIterator
 fs.promises.writeFile (file: copy FileHandle, data: copy string, options: copy BufferEncoding) => void
 fs.read (fd: &readonly Fd, buffer: copy TBuffer, offset: copy number, length: copy number, position: copy ReadPosition, callback: copy errErrnoException) => void
-fs.readFile (path: copy PathOrFileDescriptor, options: copy ReadFileOptionsWithBuffer, callback: copy errErrnoException) => unique Buffer
+fs.readFile (path: copy PathOrFileDescriptor, options: copy ReadFileOptionsWithBuffer, callback: copy errErrnoException) => void
 fs.readFileSync (path: copy PathOrFileDescriptor, options: copy ReadFileSyncOptionsWithBuffer) => unique BufferView
 fs.readSync (fd: &readonly Fd, buffer: &mut ArrayBufferView, offset: copy number, length: copy number, position: copy ReadPosition) => copy number
 fs.readdir (path: copy PathLike, options: copy encodingBufferEncoding, callback: copy errErrnoException) => void
