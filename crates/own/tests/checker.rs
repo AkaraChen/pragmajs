@@ -97,6 +97,31 @@ fn unique_consume_ok() {
 }
 
 #[test]
+fn destructured_parameter_preserves_following_contract_index() {
+    let function = r#"/*#own type: (options: copy Options, resource: unique Resource) => void */
+function forgetSecondParameter({ verbose }, resource) {
+  console.log(verbose);
+}
+"#;
+    assert!(
+        has(function, RuleKind::UniqueForget),
+        "the destructured first parameter must not shift the second parameter's contract: {:?}",
+        check_source("test.js", function).formatted_lines(),
+    );
+
+    let arrow = r#"/*#own type: (options: copy Options, resource: unique Resource) => void */
+const forgetSecondParameter = ({ verbose }, resource) => {
+  console.log(verbose);
+};
+"#;
+    assert!(
+        has(arrow, RuleKind::UniqueForget),
+        "arrow parameters must preserve the same positional contract mapping: {:?}",
+        check_source("test.js", arrow).formatted_lines(),
+    );
+}
+
+#[test]
 fn shadowed_owned_binding_is_restored_after_inner_scope() {
     let src = r#"/*#own type: (resource: unique Resource) => void */
 function forgetOuter(resource) {

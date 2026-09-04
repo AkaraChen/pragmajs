@@ -3604,16 +3604,12 @@ impl Checker<'_> {
         self.try_finally_depth = 0;
         self.pending_finally.clear();
         self.push_scope();
-        let params: Vec<(String, u32)> = func
-            .params
-            .items
-            .iter()
-            .filter_map(|p| ident_of_pattern(&p.pattern).map(|n| (n, p.span.start)))
-            .collect();
         if func.body.is_some() {
-            for (i, (pname, pspan)) in params.iter().enumerate() {
-                if let Some((_, ty)) = sig.params.get(i) {
-                    self.add_from_type(pname, ty, *pspan);
+            for (i, param) in func.params.items.iter().enumerate() {
+                if let (Some(pname), Some((_, ty))) =
+                    (ident_of_pattern(&param.pattern), sig.params.get(i))
+                {
+                    self.add_from_type(&pname, ty, param.span.start);
                 }
             }
         }
@@ -3656,15 +3652,11 @@ impl Checker<'_> {
         self.try_finally_depth = 0;
         self.pending_finally.clear();
         self.push_scope();
-        let params: Vec<(String, u32)> = arrow
-            .params
-            .items
-            .iter()
-            .filter_map(|p| ident_of_pattern(&p.pattern).map(|n| (n, p.span.start)))
-            .collect();
-        for (i, (pname, pspan)) in params.iter().enumerate() {
-            if let Some((_, ty)) = sig.params.get(i) {
-                self.add_from_type(pname, ty, *pspan);
+        for (i, param) in arrow.params.items.iter().enumerate() {
+            if let (Some(pname), Some((_, ty))) =
+                (ident_of_pattern(&param.pattern), sig.params.get(i))
+            {
+                self.add_from_type(&pname, ty, param.span.start);
             }
         }
         self.check_formal_params(&arrow.params, Some(sig));
