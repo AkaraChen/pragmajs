@@ -9,6 +9,7 @@ use oxc::ast::ast::{
     VariableDeclaration,
 };
 use oxc::span::GetSpan;
+use oxc::syntax::operator::AssignmentOperator;
 use pragma_parse::{parse, Program};
 use std::collections::{HashMap, HashSet};
 
@@ -2841,7 +2842,24 @@ impl Checker<'_> {
             }
             Statement::ExpressionStatement(e) => {
                 self.check_unmapped_eval(&e.expression);
+                let transfer = self.discarded_assignment_transfer(&e.expression);
+                let self_assignment_source = transfer.as_ref().and_then(
+                    |(source, destination, _)| (source == destination).then(|| source.clone()),
+                );
+                let saved_suppression = self_assignment_source
+                    .as_ref()
+                    .and_then(|source| self.suppress_consume.replace(source.clone()));
                 self.check_expr(&e.expression, e.span.start);
+                if self_assignment_source.is_some() {
+                    self.suppress_consume = saved_suppression;
+                } else if let Some((source, destination, entry)) = transfer {
+                    self.finish_discarded_assignment_transfer(
+                        &source,
+                        &destination,
+                        entry,
+                        e.span.start,
+                    );
+                }
                 self.check_discard(&e.expression);
             }
             Statement::SwitchStatement(s) => {
@@ -4552,6 +4570,79 @@ impl Checker<'_> {
         self.check_unique_rvalues(expr);
         self.visit_exclusive_nested(expr);
         self.check_contained_fn(expr);
+    }
+
+    /// Plan ownership transfer for a discarded, simple identifier assignment.
+    ///
+    /// The assignment expression's value is deliberately restricted to an
+    /// expression statement: in value-producing contexts, another binding or
+    /// call may immediately take ownership of that same value.
+    fn discarded_assignment_transfer(
+        &self,
+        expr: &Expression<'_>,
+    ) -> Option<(String, String, VarEntry)> {
+        let Expression::AssignmentExpression(assignment) = peel(expr) else {
+            return None;
+        };
+        if assignment.operator != AssignmentOperator::Assign {
+            return None;
+        }
+        let oxc::ast::ast::AssignmentTarget::AssignmentTargetIdentifier(destination) =
+            &assignment.left
+        else {
+            return None;
+        };
+        let source = ident_move_src(&assignment.right)?;
+        let entry = self.tbl.get(&source)?.clone();
+        if entry.state != VarState::Unconsumed
+            || !matches!(entry.kind, OwnKind::Unique | OwnKind::Affine)
+        {
+            return None;
+        }
+        let destination = destination.name.as_str().to_string();
+        if source == destination {
+            let apps = self.count(&assignment.right, &source);
+            if apps.consumed != 1 || apps.read != 0 || apps.write != 0 || apps.path != 0 {
+                // Suppressing the assignment's self-move is only sound when
+                // it is the RHS's sole use of the owned value.
+                return None;
+            }
+        }
+        // An untracked target's declaration scope is unavailable in this
+        // name-keyed checker. Only introduce one in the current function or
+        // program scope; tracked targets retain their existing scope slot.
+        if !self.tbl.contains_key(&destination) && self.scopes.len() != 1 {
+            return None;
+        }
+        Some((source, destination, entry))
+    }
+
+    fn finish_discarded_assignment_transfer(
+        &mut self,
+        source: &str,
+        destination: &str,
+        mut entry: VarEntry,
+        span: u32,
+    ) {
+        if !matches!(self.tbl.get(source), Some(e) if e.state == VarState::Consumed) {
+            // The RHS was rejected (for example, a double move, active borrow,
+            // or cross-loop move), so it cannot establish a new owner.
+            return;
+        }
+        entry.state = VarState::Unconsumed;
+        entry.loop_depth = self.loop_depth;
+        entry.defined_at = span;
+        entry.owner = None;
+        entry.read_borrows = 0;
+        entry.write_borrows = 0;
+        if self.tbl.contains_key(destination) {
+            // Settle the overwritten value, then keep the destination's
+            // existing lexical scope record for the replacement.
+            self.remove_var(destination);
+            self.tbl.insert(destination.to_string(), entry);
+        } else {
+            self.add_var(destination.to_string(), entry);
+        }
     }
 
     fn check_unmapped_in_expr(&mut self, expr: &Expression<'_>) {

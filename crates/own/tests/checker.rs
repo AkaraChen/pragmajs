@@ -97,6 +97,152 @@ fn unique_consume_ok() {
 }
 
 #[test]
+fn discarded_identifier_assignment_transfers_ownership() {
+    let forgotten = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function transfer(resource) {{\n  let destination;\n  destination = resource;\n}}\n"
+    );
+    assert!(
+        has(&forgotten, RuleKind::UniqueForget),
+        "the assignment target must inherit the unique obligation: {:?}",
+        check_source("test.js", &forgotten).formatted_lines()
+    );
+
+    let consumed = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function transfer(resource) {{\n  let destination;\n  destination = (0, resource);\n  consume(destination);\n}}\n"
+    );
+    let consumed_result = check_source("test.js", &consumed);
+    assert!(
+        !consumed_result.kinds().iter().any(|kind| matches!(
+            kind,
+            RuleKind::UniqueForget | RuleKind::UseAfterMove | RuleKind::DoubleMove
+        )),
+        "the destination must be able to consume the transferred value: {:?}",
+        consumed_result.formatted_lines()
+    );
+
+    let source_reused = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function transfer(resource) {{\n  let destination;\n  destination = resource;\n  consume(resource);\n  consume(destination);\n}}\n"
+    );
+    assert!(
+        has(&source_reused, RuleKind::UseAfterMove),
+        "the source must stay consumed after ownership transfer: {:?}",
+        check_source("test.js", &source_reused).formatted_lines()
+    );
+}
+
+#[test]
+fn identifier_assignment_settles_overwrite_and_excludes_non_moves() {
+    let overwrite = format!(
+        "{PRELUDE}\n/*#own type: (destination: unique Buffer, source: unique Buffer) => void */\n\
+         function overwrite(destination, source) {{\n  destination = source;\n  consume(destination);\n}}\n"
+    );
+    let overwrite_result = check_source("test.js", &overwrite);
+    assert_eq!(
+        overwrite_result
+            .kinds()
+            .iter()
+            .filter(|kind| **kind == RuleKind::UniqueForget)
+            .count(),
+        1,
+        "overwriting a live destination must settle exactly its old obligation: {:?}",
+        overwrite_result.formatted_lines()
+    );
+    assert!(
+        !overwrite_result.kinds().contains(&RuleKind::UseAfterMove),
+        "the replacement destination must remain consumable: {:?}",
+        overwrite_result.formatted_lines()
+    );
+
+    let self_assignment = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function keep(resource) {{\n  resource = (0, resource);\n  consume(resource);\n}}\n"
+    );
+    let self_result = check_source("test.js", &self_assignment);
+    assert!(
+        !self_result.kinds().iter().any(|kind| matches!(
+            kind,
+            RuleKind::UniqueForget | RuleKind::UseAfterMove | RuleKind::DoubleMove
+        )),
+        "self-assignment must preserve, rather than consume, the obligation: {:?}",
+        self_result.formatted_lines()
+    );
+
+    let self_forgotten = r#"/*#own type: (resource: unique Buffer) => void */
+function keep(resource) {
+  resource = resource;
+}
+"#;
+    let self_forgotten_result = check_source("test.js", self_forgotten);
+    assert_eq!(
+        self_forgotten_result
+            .kinds()
+            .iter()
+            .filter(|kind| **kind == RuleKind::UniqueForget)
+            .count(),
+        1,
+        "self-assignment must leave the original obligation live: {:?}",
+        self_forgotten_result.formatted_lines()
+    );
+
+    let self_used_twice = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function invalid(resource) {{\n  resource = (consume(resource), resource);\n}}\n"
+    );
+    assert!(
+        has(&self_used_twice, RuleKind::DoubleMove),
+        "self-assignment must not suppress other RHS uses: {:?}",
+        check_source("test.js", &self_used_twice).formatted_lines()
+    );
+
+    let compound = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function compound(resource) {{\n  let destination;\n  destination += resource;\n}}\n"
+    );
+    assert!(
+        !has(&compound, RuleKind::UniqueForget),
+        "compound assignment must not install a transferred ownership entry: {:?}",
+        check_source("test.js", &compound).formatted_lines()
+    );
+
+    let nested_untracked = format!(
+        "{PRELUDE}\n/*#own type: (resource: unique Buffer) => void */\n\
+         function nested(resource) {{\n  let destination;\n  {{ destination = resource; }}\n  consume(destination);\n}}\n"
+    );
+    let nested_result = check_source("test.js", &nested_untracked);
+    assert!(
+        !nested_result.kinds().contains(&RuleKind::UniqueForget),
+        "an untracked outer destination must not gain a short-lived inner-scope entry: {:?}",
+        nested_result.formatted_lines()
+    );
+
+    let nested_tracked = format!(
+        "{PRELUDE}\n/*#own type: (destination: unique Buffer, source: unique Buffer) => void */\n\
+         function nested(destination, source) {{\n  {{ destination = source; }}\n  consume(destination);\n}}\n"
+    );
+    let nested_tracked_result = check_source("test.js", &nested_tracked);
+    assert_eq!(
+        nested_tracked_result
+            .kinds()
+            .iter()
+            .filter(|kind| **kind == RuleKind::UniqueForget)
+            .count(),
+        1,
+        "a tracked outer destination must retain the replacement past the inner scope: {:?}",
+        nested_tracked_result.formatted_lines()
+    );
+    assert!(
+        !nested_tracked_result
+            .kinds()
+            .contains(&RuleKind::UseAfterMove),
+        "the tracked replacement must remain consumable after the inner scope: {:?}",
+        nested_tracked_result.formatted_lines()
+    );
+}
+
+#[test]
 fn destructured_parameter_preserves_following_contract_index() {
     let function = r#"/*#own type: (options: copy Options, resource: unique Resource) => void */
 function forgetSecondParameter({ verbose }, resource) {
