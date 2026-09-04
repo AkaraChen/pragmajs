@@ -127,7 +127,9 @@ pub fn check_program_with_payloads_and_features(
         annots,
         sigs: prelude_sigs.clone(),
         scoped_sigs: HashMap::new(),
+        namespace_sigs: HashMap::new(),
         collect_fn_scopes: vec![FileCtx::ROOT_SIG_SCOPE],
+        collect_namespace_member: false,
         prelude_sigs,
         ns_prefix: Vec::new(),
         payloads,
@@ -146,6 +148,7 @@ pub fn check_program_with_payloads_and_features(
         pending_finally: Vec::new(),
         checked_bodies: HashSet::new(),
         callee_scopes: Vec::new(),
+        namespace_scopes: Vec::new(),
         features,
     };
     checker.check_program(program);
@@ -368,7 +371,9 @@ struct FileCtx<'a> {
     annots: HashMap<u32, Vec<AttachedOwn>>,
     sigs: HashMap<String, FnSig>,
     scoped_sigs: HashMap<u32, HashMap<String, FnSig>>,
+    namespace_sigs: HashMap<String, HashMap<String, FnSig>>,
     collect_fn_scopes: Vec<u32>,
+    collect_namespace_member: bool,
     prelude_sigs: HashMap<String, FnSig>,
     ns_prefix: Vec<String>,
     payloads: Option<&'a dyn PayloadNames>,
@@ -389,6 +394,20 @@ impl FileCtx<'_> {
             .copied()
             .unwrap_or(Self::ROOT_SIG_SCOPE);
         self.scoped_sigs.entry(scope).or_default().insert(name, sig);
+    }
+
+    fn insert_decl_sig(&mut self, name: String, sig: FnSig, is_namespace_member: bool) {
+        if !is_namespace_member {
+            self.insert_sig(name, sig);
+            return;
+        }
+
+        let namespace = self.ns_prefix.join(".");
+        self.namespace_sigs
+            .entry(namespace.clone())
+            .or_default()
+            .insert(name.clone(), sig.clone());
+        self.sigs.insert(format!("{namespace}.{name}"), sig);
     }
 
     fn dirs_at(&self, offset: u32) -> Vec<&OwnDirective> {
@@ -563,11 +582,29 @@ impl FileCtx<'_> {
             }
             oxc::ast::ast::TSNamespaceDeclarationBody::TSModuleBlock(b) => {
                 for s in &b.body {
-                    self.collect_sigs_stmt(s, None);
+                    self.collect_sigs_namespace_member(s);
                 }
             }
         }
         self.ns_prefix.pop();
+    }
+
+    fn collect_sigs_namespace_member(&mut self, stmt: &Statement<'_>) {
+        let is_member = matches!(
+            stmt,
+            Statement::FunctionDeclaration(_) | Statement::VariableDeclaration(_)
+        ) || matches!(
+            stmt,
+            Statement::ExportDeclaration(export)
+                if matches!(
+                    export.declaration,
+                    oxc::ast::ast::Declaration::FunctionDeclaration(_)
+                        | oxc::ast::ast::Declaration::VariableDeclaration(_)
+                )
+        );
+        let saved = std::mem::replace(&mut self.collect_namespace_member, is_member);
+        self.collect_sigs_stmt(stmt, None);
+        self.collect_namespace_member = saved;
     }
 
     fn collect_sigs_decl(&mut self, decl: &oxc::ast::ast::Declaration<'_>, extra: Option<u32>) {
@@ -616,6 +653,7 @@ impl FileCtx<'_> {
     }
 
     fn collect_fn(&mut self, func: &Function<'_>, extra: Option<u32>) {
+        let is_namespace_member = std::mem::take(&mut self.collect_namespace_member);
         let mut offs = vec![func.span.start];
         if let Some(e) = extra {
             offs.push(e);
@@ -625,14 +663,10 @@ impl FileCtx<'_> {
         }
         if let Some(sig) = self.type_sig_at(&offs) {
             if let Some(name) = func.name() {
-                let n = name.as_str().to_string();
-                self.insert_sig(n.clone(), sig.clone());
-                if !self.ns_prefix.is_empty() {
-                    self.sigs
-                        .insert(format!("{}.{n}", self.ns_prefix.join(".")), sig);
-                }
+                self.insert_decl_sig(name.as_str().to_string(), sig, is_namespace_member);
             }
         }
+        self.collect_fn_scopes.push(func.span.start);
         if let Some(tp) = &func.type_parameters {
             self.collect_ts_type_params(tp);
         }
@@ -652,15 +686,15 @@ impl FileCtx<'_> {
         }
         self.collect_param_default_object_methods(&func.params);
         if let Some(body) = &func.body {
-            self.collect_fn_scopes.push(func.span.start);
             for s in &body.statements {
                 self.collect_sigs_stmt(s, None);
             }
-            self.collect_fn_scopes.pop();
         }
+        self.collect_fn_scopes.pop();
     }
 
     fn collect_var(&mut self, decl: &VariableDeclaration<'_>, extra: Option<u32>) {
+        let is_namespace_member = std::mem::take(&mut self.collect_namespace_member);
         for d in &decl.declarations {
             if let Some(t) = &d.type_annotation {
                 self.collect_ts_ann(t);
@@ -674,11 +708,7 @@ impl FileCtx<'_> {
             }
             if let Some(sig) = self.type_sig_at(&offs) {
                 if let Some(name) = ident_of_pattern(&d.id) {
-                    if !self.ns_prefix.is_empty() {
-                        self.sigs
-                            .insert(format!("{}.{name}", self.ns_prefix.join(".")), sig.clone());
-                    }
-                    self.insert_sig(name, sig);
+                    self.insert_decl_sig(name, sig, is_namespace_member);
                 }
             }
             self.collect_binding_defaults(&d.id);
@@ -2440,6 +2470,7 @@ impl FileCtx<'_> {
     }
 
     fn collect_sigs_arrow(&mut self, arrow: &ArrowFunctionExpression<'_>) {
+        self.collect_fn_scopes.push(arrow.span.start);
         if let Some(tp) = &arrow.type_parameters {
             self.collect_ts_type_params(tp);
         }
@@ -2449,11 +2480,9 @@ impl FileCtx<'_> {
         self.collect_param_default_object_methods(&arrow.params);
         match &arrow.body {
             ArrowFunctionBody::FunctionBody(body) => {
-                self.collect_fn_scopes.push(arrow.span.start);
                 for s in &body.statements {
                     self.collect_sigs_stmt(s, None);
                 }
-                self.collect_fn_scopes.pop();
             }
             other => {
                 if let Some(e) = other.as_expression() {
@@ -2461,6 +2490,7 @@ impl FileCtx<'_> {
                 }
             }
         }
+        self.collect_fn_scopes.pop();
     }
 }
 
@@ -2549,23 +2579,40 @@ struct Checker<'a> {
     /// Skip re-entry so the first annotation offsets win.
     checked_bodies: HashSet<u32>,
     callee_scopes: Vec<u32>,
+    namespace_scopes: Vec<String>,
     features: OwnFeatures,
 }
 
 impl Checker<'_> {
     fn callee_sig(&self, name: &str) -> Option<&FnSig> {
         if self.features.local_callee_contracts {
-            for scope in self.callee_scopes.iter().rev().copied().chain(std::iter::once(
-                FileCtx::ROOT_SIG_SCOPE,
-            )) {
+            for scope in self.callee_scopes.iter().rev() {
                 if let Some(sig) = self
                     .file
                     .scoped_sigs
-                    .get(&scope)
+                    .get(scope)
                     .and_then(|sigs| sigs.get(name))
                 {
                     return Some(sig);
                 }
+            }
+            for namespace in self.namespace_scopes.iter().rev() {
+                if let Some(sig) = self
+                    .file
+                    .namespace_sigs
+                    .get(namespace)
+                    .and_then(|sigs| sigs.get(name))
+                {
+                    return Some(sig);
+                }
+            }
+            if let Some(sig) = self
+                .file
+                .scoped_sigs
+                .get(&FileCtx::ROOT_SIG_SCOPE)
+                .and_then(|sigs| sigs.get(name))
+            {
+                return Some(sig);
             }
             self.file.sigs.get(name)
         } else {
@@ -6497,6 +6544,11 @@ impl Checker<'_> {
     }
 
     fn check_ts_namespace(&mut self, n: &oxc::ast::ast::TSNamespaceDeclaration<'_>) {
+        let namespace = self.namespace_scopes.last().map_or_else(
+            || n.id.name.to_string(),
+            |prefix| format!("{prefix}.{}", n.id.name),
+        );
+        self.namespace_scopes.push(namespace);
         match &n.body {
             oxc::ast::ast::TSNamespaceDeclarationBody::TSNamespaceDeclaration(inner) => {
                 self.check_ts_namespace(inner);
@@ -6505,6 +6557,7 @@ impl Checker<'_> {
                 self.check_ts_module_block(b);
             }
         }
+        self.namespace_scopes.pop();
     }
 
     fn check_ts_module_block(&mut self, b: &oxc::ast::ast::TSModuleBlock<'_>) {

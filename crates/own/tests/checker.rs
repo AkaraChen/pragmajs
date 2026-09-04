@@ -3219,6 +3219,128 @@ N.inner();
 }
 
 #[test]
+fn namespace_function_contracts_are_lexical_hoisted_and_merged() {
+    let merged = r#"
+namespace N {
+  make();
+}
+namespace N {
+  /*#own type: () => unique Buffer */
+  export function make() { return Buffer.from("x"); }
+}
+"#;
+    assert!(
+        forgets_unique_named("test.ts", merged),
+        "merged namespace contract should be hoisted: {:?}",
+        check_source("test.ts", merged).formatted_lines()
+    );
+
+    let enclosing = r#"
+namespace Outer {
+  /*#own type: () => unique Buffer */
+  export function make() { return Buffer.from("x"); }
+  namespace Inner {
+    make();
+  }
+}
+"#;
+    assert!(
+        forgets_unique_named("test.ts", enclosing),
+        "nested namespace should resolve its enclosing namespace: {:?}",
+        check_source("test.ts", enclosing).formatted_lines()
+    );
+
+    let isolated = r#"
+/*#own type: () => void */
+function make() {}
+namespace N {
+  /*#own type: () => unique Buffer */
+  export function make() { return Buffer.from("x"); }
+}
+make();
+"#;
+    assert!(
+        !forgets_unique_named("test.ts", isolated),
+        "namespace member must not overwrite the root contract: {:?}",
+        check_source("test.ts", isolated).formatted_lines()
+    );
+
+    let nested_block = r#"
+namespace N {
+  /*#own type: () => void */
+  export function make() {}
+  if (true) {
+    /*#own type: () => unique Buffer */
+    function make() { return Buffer.from("block"); }
+  }
+}
+N.make();
+"#;
+    assert!(
+        !forgets_unique_named("test.ts", nested_block),
+        "nested block declaration must not become a qualified member: {:?}",
+        check_source("test.ts", nested_block).formatted_lines()
+    );
+}
+
+#[test]
+fn namespace_arrow_contracts_do_not_leak_from_arrow_bodies() {
+    let member = r#"
+namespace N {
+  /*#own type: () => unique Buffer */
+  export const make = () => Buffer.from("x");
+  make();
+}
+N.make();
+"#;
+    let member_result = check_source("test.ts", member);
+    assert_eq!(
+        member_result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == RuleKind::UniqueForget)
+            .count(),
+        2,
+        "namespace arrow should resolve both bare and qualified: {:?}",
+        member_result.formatted_lines()
+    );
+
+    let local = r#"
+namespace N {
+  /*#own type: () => void */
+  export const make = () => {};
+  export const installLocal = () => {
+    /*#own type: () => unique Buffer */
+    const make = () => Buffer.from("local");
+  };
+}
+N.make();
+"#;
+    assert!(
+        !forgets_unique_named("test.ts", local),
+        "arrow-local contract must not overwrite the qualified member: {:?}",
+        check_source("test.ts", local).formatted_lines()
+    );
+
+    let reverse = r#"
+namespace N {
+  /*#own type: () => unique Buffer */
+  export const make = () => Buffer.from("namespace");
+  export const installLocal = () => {
+    /*#own type: () => void */
+    const make = () => {};
+  };
+}
+N.make();
+"#;
+    assert!(
+        forgets_unique_named("test.ts", reverse),
+        "arrow-local contract must not hide the qualified member: {:?}",
+        check_source("test.ts", reverse).formatted_lines()
+    );
+}
+
+#[test]
 fn iife_void_param_and_export_arrow() {
     let src_iife = r#"
 (/*#own type: () => unique Buffer */ function () { return Buffer.from("x"); })();

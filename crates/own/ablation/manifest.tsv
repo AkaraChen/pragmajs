@@ -43,3 +43,7 @@ fixtures/reject-unknown-optional-method-only.js	REJECT:unique-forget
 fixtures/accept-local-drop-directive.js	ACCEPT
 fixtures/reject-local-kind-directive.js	REJECT:unique-forget
 fixtures/reject-local-let-directive.js	REJECT:unique-forget
+fixtures/reject-namespace-bare-cross-pollution.ts	REJECT:unique-forget
+fixtures/accept-namespace-does-not-pollute-root.ts	ACCEPT
+fixtures/accept-namespace-local-does-not-pollute-qualified.ts	ACCEPT
+fixtures/reject-namespace-local-does-not-hide-qualified.ts	REJECT:unique-forget
