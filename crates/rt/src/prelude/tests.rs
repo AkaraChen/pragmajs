@@ -2,7 +2,7 @@ use crate::syntax::{BaseType, PredicateExpr};
 
 use super::{
     CallbackTiming, Environment, EnvironmentError, LibraryExport, ReceiverEffect,
-    SemanticRefinement, catalog, detect_environment, registry_for_source,
+    SemanticRefinement, catalog, detect_environment, registry_for_program,
 };
 
 fn detect(source: &str) -> Result<Environment, EnvironmentError> {
@@ -73,7 +73,10 @@ fn incompatible_runtime_markers_report_deterministic_evidence() {
 
 #[test]
 fn explicit_environment_wins_over_source_markers() {
-    let selected = registry_for_source(Environment::Node, "Deno.cwd();", "detect.js").unwrap();
+    let allocator = pragma_parse::Allocator::default();
+    let parsed = pragma_parse::parse(&allocator, "detect.js", "Deno.cwd();");
+    assert!(parsed.diagnostics.is_empty());
+    let selected = registry_for_program(Environment::Node, &parsed.program).unwrap();
     assert_eq!(selected.environment(), Environment::Node);
 }
 

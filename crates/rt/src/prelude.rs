@@ -16,21 +16,8 @@ pub use model::{
     LibraryParameter, LibraryRegistry, ReceiverEffect, SemanticRefinement,
 };
 
-/// Resolve `Auto` from the source and build its deterministic library catalog.
-/// An explicit environment wins over incidental source markers.
-pub fn registry_for_source(
-    requested: Environment,
-    source: &str,
-    file_name: &str,
-) -> Result<LibraryRegistry, EnvironmentError> {
-    let environment = match requested {
-        Environment::Auto => detect_environment(source, file_name)?,
-        environment => environment,
-    };
-    Ok(catalog::build(environment))
-}
-
-/// Like [`registry_for_source`], using a program already produced by `pragma_parse`.
+/// Resolve `Auto` from an already parsed program and build its deterministic
+/// library catalog. An explicit environment wins over incidental source markers.
 pub fn registry_for_program(
     requested: Environment,
     program: &pragma_parse::Program<'_>,
