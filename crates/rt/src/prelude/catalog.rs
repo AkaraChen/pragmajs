@@ -332,7 +332,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             array_type(type_variable("$T")),
         )
         .with_receiver(receiver.clone())
-        .with_effects(receiver_effects(ReceiverEffect::None))
         .with_refinements(vec![SemanticRefinement::ResultLengthAtMostReceiver]),
     );
     registry.add_receiver_method(
@@ -345,8 +344,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             ],
             primitive_type("boolean"),
         )
-        .with_receiver(receiver.clone())
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(receiver.clone()),
     );
     registry.add_receiver_method(
         "Array",
@@ -358,8 +356,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             )],
             optional_type(type_variable("$T")),
         )
-        .with_receiver(receiver.clone())
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(receiver.clone()),
     );
     registry.add_receiver_method(
         "Array",
@@ -462,15 +459,13 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
         "Response",
         "text",
         FunctionSignature::new(Vec::new(), promise_type(primitive("string")))
-            .with_receiver(named_type("Response"))
-            .with_effects(receiver_effects(ReceiverEffect::None)),
+            .with_receiver(named_type("Response")),
     );
     registry.add_receiver_method(
         "Response",
         "json",
         FunctionSignature::new(Vec::new(), promise_type(primitive("unknown")))
-            .with_receiver(named_type("Response"))
-            .with_effects(receiver_effects(ReceiverEffect::None)),
+            .with_receiver(named_type("Response")),
     );
     registry.add_receiver_method(
         "Headers",
@@ -479,8 +474,7 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
             vec![LibraryParameter::required("name", primitive_type("string"))],
             nullable_type(primitive("string")),
         )
-        .with_receiver(named_type("Headers"))
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(named_type("Headers")),
     );
 }
 
@@ -583,8 +577,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             )],
             nullable_type(named("Element")),
         )
-        .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(named_type("Document")),
     );
     registry.add_receiver_method(
         "Document",
@@ -596,8 +589,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             )],
             named_type("NodeList"),
         )
-        .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(named_type("Document")),
     );
     registry.add_receiver_method(
         "Document",
@@ -606,8 +598,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             vec![LibraryParameter::required("id", primitive_type("string"))],
             nullable_type(named("HTMLElement")),
         )
-        .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(named_type("Document")),
     );
     registry.add_receiver_method(
         "Document",
@@ -619,8 +610,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             )],
             named_type("HTMLElement"),
         )
-        .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::None)),
+        .with_receiver(named_type("Document")),
     );
     registry.add_receiver_method(
         "EventTarget",
@@ -1028,8 +1018,7 @@ fn add_bun(registry: &mut LibraryRegistry) {
         "BunFile",
         "text",
         FunctionSignature::new(Vec::new(), promise_type(primitive("string")))
-            .with_receiver(named_type("BunFile"))
-            .with_effects(receiver_effects(ReceiverEffect::None)),
+            .with_receiver(named_type("BunFile")),
     );
     registry.add_receiver_property(
         "BunFile",
