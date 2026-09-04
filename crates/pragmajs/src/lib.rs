@@ -62,6 +62,55 @@ impl Default for CheckerSelection {
     }
 }
 
+/// A coherent platform choice shared by the ownership and refinement checkers.
+///
+/// Unlike the low-level `runtime` and `environment` settings, a profile cannot
+/// select different platforms for the two checkers. There is deliberately no
+/// `Auto` profile: refinement auto-detection has no ownership-runtime
+/// equivalent, so exposing it here would not be an atomic platform choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformProfile {
+    Ecmascript,
+    Browser,
+    Node,
+    Deno,
+    Bun,
+}
+
+impl PlatformProfile {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ecmascript" => Some(Self::Ecmascript),
+            "browser" => Some(Self::Browser),
+            "node" => Some(Self::Node),
+            "deno" => Some(Self::Deno),
+            "bun" => Some(Self::Bun),
+            _ => None,
+        }
+    }
+
+    /// Resolve both checker-specific settings as one indivisible choice.
+    pub const fn settings(self) -> (Runtime, Environment) {
+        match self {
+            Self::Ecmascript => (Runtime::None, Environment::Ecmascript),
+            Self::Browser => (Runtime::None, Environment::Browser),
+            Self::Node => (Runtime::Node, Environment::Node),
+            Self::Deno => (Runtime::Deno, Environment::Deno),
+            Self::Bun => (Runtime::Bun, Environment::Bun),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ecmascript => "ecmascript",
+            Self::Browser => "browser",
+            Self::Node => "node",
+            Self::Deno => "deno",
+            Self::Bun => "bun",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckOptions {
     pub checker: CheckerSelection,
@@ -78,6 +127,16 @@ impl Default for CheckOptions {
             environment: Environment::Auto,
             compiler: CompilerMode::Auto,
         }
+    }
+}
+
+impl CheckOptions {
+    /// Apply one coherent platform profile to both checkers.
+    pub const fn with_platform(mut self, profile: PlatformProfile) -> Self {
+        let (runtime, environment) = profile.settings();
+        self.runtime = runtime;
+        self.environment = environment;
+        self
     }
 }
 
@@ -634,6 +693,7 @@ fn json_string(value: &str) -> String {
 const TARGET_VALUES: &str = "auto, ecmascript, browser, node, deno, bun";
 const RUNTIME_VALUES: &str = "node, bun, deno, none";
 const CHECKER_VALUES: &str = "all, own, rt";
+const PLATFORM_VALUES: &str = "ecmascript, browser, node, deno, bun";
 
 pub fn parse_args(args: &[String]) -> Result<Command, String> {
     if args.is_empty() {
@@ -652,7 +712,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             let (options, positional) = parse_options(rest)?;
             if positional.is_empty() {
                 return Err(format!(
-                    "Usage: pragmajs check [--checker <{CHECKER_VALUES}>] [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>..."
+                    "Usage: pragmajs check [--checker <{CHECKER_VALUES}>] [--platform <{PLATFORM_VALUES}>] [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>..."
                 ));
             }
             Ok(Command::Check {
@@ -664,7 +724,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             let (options, positional) = parse_options(rest)?;
             if positional.len() != 2 {
                 return Err(format!(
-                    "Usage: pragmajs build [--checker <{CHECKER_VALUES}>] [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>"
+                    "Usage: pragmajs build [--checker <{CHECKER_VALUES}>] [--platform <{PLATFORM_VALUES}>] [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>"
                 ));
             }
             Ok(Command::Build {
@@ -681,6 +741,8 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
     let mut checker = CheckerSelection::All;
     let mut runtime = Runtime::default();
     let mut environment = Environment::Auto;
+    let mut platform = None;
+    let mut platform_seen = false;
     let mut target_seen = false;
     let mut runtime_seen = false;
     let mut checker_seen = false;
@@ -711,6 +773,32 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
             }
             checker = parse_checker(value)?;
             checker_seen = true;
+            index += 1;
+            continue;
+        }
+
+        let platform_value = if argument == "--platform" {
+            index += 1;
+            Some(
+                args.get(index)
+                    .ok_or_else(|| {
+                        format!(
+                            "Missing value for '--platform'. Expected one of: {PLATFORM_VALUES}."
+                        )
+                    })?
+                    .as_str(),
+            )
+        } else {
+            argument.strip_prefix("--platform=")
+        };
+        if let Some(value) = platform_value {
+            if platform_seen {
+                return Err("Platform specified more than once.".to_string());
+            }
+            platform = Some(PlatformProfile::parse(value).ok_or_else(|| {
+                format!("Unknown platform '{value}'. Expected one of: {PLATFORM_VALUES}.")
+            })?);
+            platform_seen = true;
             index += 1;
             continue;
         }
@@ -820,6 +908,16 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
     if corsa_off && (corsa_path.is_some() || tsconfig_path.is_some()) {
         return Err("'--no-corsa' cannot be combined with '--corsa' or '--tsconfig'.".to_string());
     }
+    if platform_seen && (runtime_seen || target_seen) {
+        return Err(
+            "'--platform' cannot be combined with the low-level '--runtime' or '--target' options."
+                .to_string(),
+        );
+    }
+
+    if let Some(profile) = platform {
+        (runtime, environment) = profile.settings();
+    }
 
     let compiler = if corsa_off {
         CompilerMode::Off
@@ -901,17 +999,21 @@ fn is_js_ts(path: &Path) -> bool {
 pub fn help_text() -> &'static str {
     "pragmajs — parse once, then run /*#own and /*#rt checks\n\n\
      Usage:\n\
-         pragmajs check [--checker all|own|rt] [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
+         pragmajs check [--checker all|own|rt] [--platform ecmascript|browser|node|deno|bun]\n\
+                 [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
                  [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>...\n\
-         pragmajs build [--checker all|own|rt] [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
+         pragmajs build [--checker all|own|rt] [--platform ecmascript|browser|node|deno|bun]\n\
+                 [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
                  [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>\n\n\
      --checker       Checker selection: all (default), own, or rt\n\
-     --runtime, -r   Ownership prelude: node (default), bun, deno, or none\n\
-     --target        Refinement prelude: auto (default), ecmascript, browser, node, deno, bun\n\
+     --platform      Set both checker preludes: ecmascript, browser, node, deno, or bun\n\
+     --runtime, -r   Low-level ownership override: node (default), bun, deno, or none\n\
+     --target        Low-level refinement override: auto (default), ecmascript, browser, node, deno, bun\n\
      --corsa         Corsa executable (default: bundled tsgo, else CORSA_BIN / PATH)\n\
      --tsconfig      TypeScript config (default: nearest tsconfig.json, else a temp project)\n\
      --no-corsa      Do not query TypeScript\n\n\
-     Corsa is on by default. check reports ownership and refinement diagnostics.\n\
+     --platform cannot be combined with --runtime or --target. Corsa is on by default.\n\
+     check reports ownership and refinement diagnostics.\n\
      build also writes JavaScript that preserves __rt.assert after both checks succeed."
 }
 
@@ -1009,6 +1111,116 @@ mod tests {
             ])),
             Err("Checker specified more than once.".to_string())
         );
+    }
+
+    #[test]
+    fn platform_profiles_atomically_map_both_checkers() {
+        for (value, profile, runtime, environment) in [
+            (
+                "ecmascript",
+                PlatformProfile::Ecmascript,
+                Runtime::None,
+                Environment::Ecmascript,
+            ),
+            (
+                "browser",
+                PlatformProfile::Browser,
+                Runtime::None,
+                Environment::Browser,
+            ),
+            (
+                "node",
+                PlatformProfile::Node,
+                Runtime::Node,
+                Environment::Node,
+            ),
+            (
+                "deno",
+                PlatformProfile::Deno,
+                Runtime::Deno,
+                Environment::Deno,
+            ),
+            ("bun", PlatformProfile::Bun, Runtime::Bun, Environment::Bun),
+        ] {
+            assert_eq!(PlatformProfile::parse(value), Some(profile));
+            assert_eq!(profile.as_str(), value);
+            assert_eq!(profile.settings(), (runtime, environment));
+            assert_eq!(
+                CheckOptions::default().with_platform(profile),
+                CheckOptions {
+                    checker: CheckerSelection::All,
+                    runtime,
+                    environment,
+                    compiler: CompilerMode::Auto,
+                }
+            );
+            assert_eq!(
+                parse_args(&args(&["check", "--platform", value, "input.js"])),
+                Ok(Command::Check {
+                    paths: vec![PathBuf::from("input.js")],
+                    options: CheckOptions {
+                        checker: CheckerSelection::All,
+                        runtime,
+                        environment,
+                        compiler: CompilerMode::Auto,
+                    },
+                })
+            );
+        }
+
+        assert_eq!(
+            parse_args(&args(
+                &["build", "input.js", "output.js", "--platform=bun",]
+            )),
+            Ok(Command::Build {
+                input_path: "input.js".to_string(),
+                output_path: "output.js".to_string(),
+                options: CheckOptions::default().with_platform(PlatformProfile::Bun),
+            })
+        );
+    }
+
+    #[test]
+    fn platform_rejects_non_atomic_or_duplicate_configuration() {
+        assert_eq!(
+            parse_args(&args(&["check", "input.js", "--platform"])),
+            Err(
+                "Missing value for '--platform'. Expected one of: ecmascript, browser, node, deno, bun."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            parse_args(&args(&["check", "--platform", "auto", "input.js"])),
+            Err(
+                "Unknown platform 'auto'. Expected one of: ecmascript, browser, node, deno, bun."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "check",
+                "--platform=node",
+                "--platform",
+                "bun",
+                "input.js",
+            ])),
+            Err("Platform specified more than once.".to_string())
+        );
+        for options in [
+            ["--platform", "bun", "--runtime", "bun"],
+            ["--target", "bun", "--platform", "bun"],
+        ] {
+            let mut values = vec!["check"];
+            values.extend(options);
+            values.push("input.js");
+            assert_eq!(
+                parse_args(&args(&values)),
+                Err(
+                    "'--platform' cannot be combined with the low-level '--runtime' or '--target' options."
+                        .to_string()
+                )
+            );
+        }
     }
 
     #[test]

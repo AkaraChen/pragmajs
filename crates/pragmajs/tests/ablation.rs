@@ -13,7 +13,7 @@ fn named<'a>(observations: &'a [Observation], name: &str) -> &'a Observation {
 #[test]
 fn integration_matrix_matches_gold_and_keeps_producers_separate() {
     let observations = run_matrix().expect("integration matrix should run without Corsa");
-    assert_eq!(observations.len(), 19, "unexpected matrix size");
+    assert_eq!(observations.len(), 24, "unexpected matrix size");
     assert!(
         observations
             .iter()
@@ -94,6 +94,24 @@ fn matrix_exposes_compiler_evidence_and_independent_platform_axes() {
     assert!(node_node.rt_diagnostics[0].contains("No static type information"));
     assert!(node_bun.rt_diagnostics.is_empty());
     assert!(bun_bun.rt_diagnostics.is_empty());
+
+    for (name, platform, runtime, target) in [
+        ("profile-ecmascript", "ecmascript", "none", "ecmascript"),
+        ("profile-browser", "browser", "none", "browser"),
+        ("profile-node", "node", "node", "node"),
+        ("profile-deno", "deno", "deno", "deno"),
+        ("profile-bun", "bun", "bun", "bun"),
+    ] {
+        let observation = named(&observations, name);
+        assert_eq!(observation.platform, platform);
+        assert_eq!(observation.runtime, runtime);
+        assert_eq!(observation.target, target);
+    }
+
+    let profile_bun = named(&observations, "profile-bun");
+    assert_eq!(profile_bun.own_diagnostics.len(), 1);
+    assert!(profile_bun.own_diagnostics[0].starts_with("unique-forget:"));
+    assert!(profile_bun.rt_diagnostics.is_empty());
 }
 
 #[test]
@@ -101,7 +119,7 @@ fn csv_is_stable_and_contains_diagnostic_details() {
     let observations = run_matrix().expect("integration matrix should run without Corsa");
     let csv = render_csv(&observations);
     assert_eq!(csv.lines().count(), observations.len() + 1);
-    assert!(csv.starts_with("name,fixture,checker,compiler,runtime,target,"));
+    assert!(csv.starts_with("name,fixture,checker,compiler,platform,runtime,target,"));
     assert!(csv.contains("unique-forget:"));
     assert!(csv.contains("Semantic:TS9999: deterministic compiler diagnostic"));
     assert!(csv.contains("Return value of 'incorrectlyPositive'"));

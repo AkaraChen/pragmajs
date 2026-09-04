@@ -10,7 +10,7 @@ use pragma_rt::type_provider::{
 };
 use pragmajs::{
     check_parsed, check_parsed_with_compiler_provider, CheckOptions, CheckerSelection,
-    CombinedCheck, CombinedError, CompilerMode, CompilerOptions,
+    CombinedCheck, CombinedError, CompilerMode, CompilerOptions, PlatformProfile,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,7 @@ struct Cell {
     fixture: PathBuf,
     checker: CheckerSelection,
     compiler: CompilerCell,
+    platform: Option<PlatformProfile>,
     runtime: Runtime,
     target: Environment,
     expected: Counts,
@@ -50,6 +51,7 @@ pub struct Observation {
     pub fixture: String,
     pub checker: String,
     pub compiler: String,
+    pub platform: String,
     pub runtime: String,
     pub target: String,
     pub parse_diagnostics: Vec<String>,
@@ -158,6 +160,15 @@ fn parse_compiler(value: &str) -> Result<CompilerCell, String> {
     }
 }
 
+fn parse_platform(value: &str) -> Result<Option<PlatformProfile>, String> {
+    if value == "-" {
+        return Ok(None);
+    }
+    PlatformProfile::parse(value)
+        .map(Some)
+        .ok_or_else(|| format!("unknown platform profile `{value}`"))
+}
+
 fn parse_runtime(value: &str) -> Result<Runtime, String> {
     Runtime::parse(value).ok_or_else(|| format!("unknown runtime `{value}`"))
 }
@@ -192,9 +203,9 @@ fn load_cells() -> Result<Vec<Cell>, String> {
         }
         let line_number = index + 1;
         let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() != 12 {
+        if fields.len() != 13 {
             return Err(format!(
-                "manifest line {line_number} has {} fields; expected 12",
+                "manifest line {line_number} has {} fields; expected 13",
                 fields.len()
             ));
         }
@@ -205,21 +216,33 @@ fn load_cells() -> Result<Vec<Cell>, String> {
                 fixture.display()
             ));
         }
+        let platform = parse_platform(fields[4])?;
+        let (runtime, target) = if let Some(profile) = platform {
+            if fields[5] != "-" || fields[6] != "-" {
+                return Err(format!(
+                    "manifest line {line_number} cannot combine a platform profile with runtime/target overrides"
+                ));
+            }
+            profile.settings()
+        } else {
+            (parse_runtime(fields[5])?, parse_target(fields[6])?)
+        };
         cells.push(Cell {
             name: fields[0].to_string(),
             fixture,
             checker: parse_checker(fields[2])?,
             compiler: parse_compiler(fields[3])?,
-            runtime: parse_runtime(fields[4])?,
-            target: parse_target(fields[5])?,
+            platform,
+            runtime,
+            target,
             expected: Counts {
-                parse: parse_count(fields[6], line_number, "parse")?,
-                own: parse_count(fields[7], line_number, "own")?,
-                rt: parse_count(fields[8], line_number, "rt")?,
-                compiler: parse_count(fields[9], line_number, "compiler")?,
-                provider: parse_count(fields[10], line_number, "provider")?,
+                parse: parse_count(fields[7], line_number, "parse")?,
+                own: parse_count(fields[8], line_number, "own")?,
+                rt: parse_count(fields[9], line_number, "rt")?,
+                compiler: parse_count(fields[10], line_number, "compiler")?,
+                provider: parse_count(fields[11], line_number, "provider")?,
             },
-            expected_failed: fields[11]
+            expected_failed: fields[12]
                 .parse()
                 .map_err(|_| format!("manifest line {line_number} has invalid failed boolean"))?,
         });
@@ -236,11 +259,15 @@ fn options(cell: &Cell) -> CheckOptions {
             tsconfig_path: None,
         }),
     };
-    CheckOptions {
+    let options = CheckOptions {
         checker: cell.checker,
         runtime: cell.runtime,
         environment: cell.target,
         compiler,
+    };
+    match cell.platform {
+        Some(platform) => options.with_platform(platform),
+        None => options,
     }
 }
 
@@ -346,6 +373,11 @@ fn observation(
             .into_owned(),
         checker: checker_name(cell.checker).to_string(),
         compiler: compiler_name(cell.compiler).to_string(),
+        platform: cell
+            .platform
+            .map(PlatformProfile::as_str)
+            .unwrap_or("-")
+            .to_string(),
         runtime: runtime_name(cell.runtime).to_string(),
         target: target_name(cell.target).to_string(),
         parse_diagnostics,
@@ -419,15 +451,16 @@ fn details(values: &[String]) -> String {
 }
 
 pub fn render_csv(observations: &[Observation]) -> String {
-    let mut lines = vec!["name,fixture,checker,compiler,runtime,target,frontend_parse_count,elapsed_micros,parse_diagnostic_count,own_diagnostic_count,rt_diagnostic_count,compiler_diagnostic_count,provider_error_count,combined_failed,matches_gold,parse_diagnostics,own_diagnostics,rt_diagnostics,compiler_diagnostics,provider_errors".to_string()];
+    let mut lines = vec!["name,fixture,checker,compiler,platform,runtime,target,frontend_parse_count,elapsed_micros,parse_diagnostic_count,own_diagnostic_count,rt_diagnostic_count,compiler_diagnostic_count,provider_error_count,combined_failed,matches_gold,parse_diagnostics,own_diagnostics,rt_diagnostics,compiler_diagnostics,provider_errors".to_string()];
     for observation in observations {
         let counts = observation.counts();
         lines.push(format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             csv(&observation.name),
             csv(&observation.fixture),
             observation.checker,
             observation.compiler,
+            observation.platform,
             observation.runtime,
             observation.target,
             observation.frontend_parse_count,
