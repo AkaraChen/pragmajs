@@ -377,7 +377,6 @@ fn callable_offset(expression: &Expression<'_>) -> Option<u32> {
     match expression {
         Expression::Identifier(identifier) => Some(identifier.span.start),
         Expression::StaticMemberExpression(member) => Some(member.property.span.start),
-        Expression::ComputedMemberExpression(_) => None,
         Expression::PrivateFieldExpression(member) => Some(member.field.span.start),
         Expression::ParenthesizedExpression(parenthesized) => {
             callable_offset(&parenthesized.expression)
