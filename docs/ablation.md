@@ -37,28 +37,31 @@ ABLATION_ROUNDS=5 cargo run -p pragma-rt --example ablation
 
 ## Ownership: first OAT screen
 
-Corpus: 38 cases: 17 `ACCEPT`, 19 `REJECT`, and 2 `OUT_OF_DOMAIN`.
+Corpus: 42 cases: 19 `ACCEPT`, 21 `REJECT`, and 2 `OUT_OF_DOMAIN`.
 The manifest is [`crates/own/ablation/manifest.tsv`](../crates/own/ablation/manifest.tsv).
 
 | Variant | Valid kept | Lost valid | Invalid caught | Escaped invalid | Reason changed | OOD guarded | Changed cases |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| baseline | 14 | 3 | 14 | 5 | 0 | 2 | 0 |
-| no function contracts | 14 | 3 | 1 | 16 | 2 | 1 | 18 |
-| no move tracking | 16 | 1 | 0 | 17 | 2 | 1 | 19 |
-| no exact-once | 15 | 2 | 11 | 8 | 0 | 2 | 8 |
-| no affine kind | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
-| no borrow model | 13 | 4 | 9 | 7 | 3 | 2 | 6 |
-| no local directives | 12 | 5 | 12 | 5 | 2 | 2 | 4 |
-| no local callee contracts | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
-| no owned-return propagation | 15 | 2 | 12 | 7 | 0 | 2 | 3 |
-| no instance dispatch | 13 | 4 | 14 | 5 | 0 | 2 | 1 |
-| no control-flow splitting | 13 | 4 | 13 | 6 | 0 | 2 | 2 |
-| no loop depth | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
-| no non-consuming paths | 13 | 4 | 15 | 4 | 0 | 2 | 4 |
-| no unknown-call conservatism | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
-| no optional-call paths | 14 | 3 | 15 | 4 | 0 | 2 | 1 |
-| no unmapped guards | 15 | 2 | 14 | 5 | 0 | 0 | 3 |
-| no runtime prelude | 13 | 4 | 13 | 6 | 0 | 2 | 4 |
+| baseline | 15 | 4 | 16 | 5 | 0 | 2 | 0 |
+| no function contracts | 16 | 3 | 3 | 16 | 2 | 1 | 19 |
+| no move tracking | 18 | 1 | 0 | 19 | 2 | 1 | 22 |
+| no exact-once | 17 | 2 | 11 | 10 | 0 | 2 | 11 |
+| no affine kind | 15 | 4 | 15 | 6 | 0 | 2 | 1 |
+| no borrow model | 14 | 5 | 11 | 7 | 3 | 2 | 6 |
+| no local borrow directives | 14 | 5 | 14 | 5 | 2 | 2 | 3 |
+| no local clone directives | 14 | 5 | 16 | 5 | 0 | 2 | 1 |
+| no local drop directives | 14 | 5 | 16 | 5 | 0 | 2 | 1 |
+| no local kind directives | 15 | 4 | 14 | 7 | 0 | 2 | 2 |
+| no local callee contracts | 15 | 4 | 15 | 6 | 0 | 2 | 1 |
+| no owned-return propagation | 16 | 3 | 14 | 7 | 0 | 2 | 3 |
+| no instance dispatch | 14 | 5 | 16 | 5 | 0 | 2 | 1 |
+| no control-flow splitting | 14 | 5 | 15 | 6 | 0 | 2 | 2 |
+| no loop depth | 15 | 4 | 15 | 6 | 0 | 2 | 1 |
+| no non-consuming paths | 15 | 4 | 17 | 4 | 0 | 2 | 5 |
+| no unknown-call conservatism | 15 | 4 | 15 | 6 | 0 | 2 | 1 |
+| no optional-call paths | 16 | 3 | 17 | 4 | 0 | 2 | 2 |
+| no unmapped guards | 16 | 3 | 16 | 5 | 0 | 0 | 3 |
+| no runtime prelude | 14 | 5 | 15 | 6 | 0 | 2 | 4 |
 
 Every implemented axis changes at least one case. The small improvements in
 `valid kept` are not wins: for example, disabling move tracking removes false
@@ -77,11 +80,17 @@ The important positive evidence is bidirectional:
 - loop definition depth, local call effects, owned returns, instance receiver
   effects, unknown-call conservatism, and the runtime prelude each have a
   direct witness;
+- the former `local-directives` switch was exactly equivalent to disabling its
+  borrow, clone, drop, and kind components together, so the redundant master
+  state was removed. Each component now has its own witness;
 - treating every optional call as a non-consuming path is too coarse: when the
   callee is a known local function, `consume?.(value)` must consume on the only
   feasible path. Removing the approximation catches one existing false
-  negative, so the replacement must use callee nullability rather than delete
-  optional-call splitting globally;
+  negative. A second known-callee witness is valid when its only use is
+  `consume?.(value)`, but the same syntax-only split invents an infeasible
+  skipped branch and rejects it. Both results require callee nullability rather
+  than punctuation alone. A truly nullable-callee witness remains out of reach
+  until the ownership contract language can express a callable parameter;
 - `Apps.path` is a composite abstraction (member heads, Copy/ref arguments,
   known variadics, and optional calls), so its row cannot identify which path
   source is valuable.
@@ -90,7 +99,7 @@ Dependencies that prevent a naive causal reading include:
 
 ```text
 function contracts -> local callee contracts
-local directives -> lexical borrow and shorthand borrow
+local borrow directives -> lexical borrow and shorthand borrow
 callee contracts -> owned-return propagation
 instance dispatch -> receiver effects and some owned returns
 unknown-call conservatism x non-consuming paths
@@ -102,15 +111,15 @@ The runner also evaluates five complete 2x2 cells. The contrast below is
 | Interaction | Valid kept | Lost valid | Invalid caught | Escaped invalid | Reason changed |
 |---|---:|---:|---:|---:|---:|
 | function contracts x local callee contracts | 0 | 0 | +1 | -1 | 0 |
-| borrow model x local directives | +1 | -1 | +2 | 0 | -2 |
+| borrow model x local borrow directives | +1 | -1 | +2 | 0 | -2 |
 | owned return x instance dispatch | 0 | 0 | 0 | 0 | 0 |
 | unknown-call conservatism x non-consuming paths | 0 | 0 | +1 | -1 | 0 |
-| move tracking x exact-once | -1 | +1 | +3 | -3 | 0 |
+| move tracking x exact-once | -2 | +2 | +5 | -5 | 0 |
 
 The first, second, fourth, and fifth pairs empirically confirm coupling; the
 owned-return/instance pair is additive on this corpus, not proven independent.
-The next run must split the composite `local-directives`, `borrow-model`, and
-`Apps.path` axes.
+The next run must split the remaining composite `borrow-model` and `Apps.path`
+axes.
 
 ## Ownership: baseline contradictions
 
@@ -127,9 +136,9 @@ fixture under `crates/own/ablation/fixtures`.
 | name-only capture scan | false positive | an arrow parameter shadowing an outer owned name is reported as a capture |
 | file-global `HashMap<String, FnSig>` | false positive | a nested same-name function overwrites an unrelated top-level callee contract |
 | overload collapse + `is_fs_readfile_callback` | false positive | callback `fs.readFile` bound to a variable is modeled as returning a unique `Buffer` |
-| unconditional optional-call path splitting | false negative | optional call of a definitely bound local consumer is treated as if it could be skipped |
+| syntax-only optional-call path splitting | false negative and false positive | a definitely bound local consumer is treated as skippable, both missing later reuse and inventing a forget when it is the only use |
 
-The observed baseline is therefore 14/17 valid cases retained and 14/19
+The observed baseline is therefore 15/19 valid cases retained and 16/21
 invalid cases caught. The legacy `pragma-own` suite still passes (123 tests),
 which demonstrates why its mostly `contains(...)` assertions cannot serve as
 precision/recall gold.
@@ -164,11 +173,9 @@ parsing overhead.
 | direct SMT | 40 | 0 | 92 | 0 | 9,234.629 ms |
 
 Acceptance changes: **0**. Exact diagnostic-list changes: **0**. Direct SMT
-was 9.86% faster in this run. Direct SMT is now the production default; the
-legacy Fixedpoint backend remains explicitly selectable by the runner so the
-differential experiment stays reproducible. Deleting that backend is deferred
-until CI/release-mode repetitions and solver-call counters cover worst-case
-latency and `Unknown` behavior outside this corpus.
+was 9.86% faster in this run. Direct SMT then became the production default,
+while the legacy backend remained explicitly selectable for another
+differential run.
 
 The congruence experiment added one directed positive fixture, bringing the
 current corpus to 133 files. A one-round rerun (timing is noisier than the
@@ -191,6 +198,14 @@ returns `y` under the contract `p($)`. Removing congruence rejects exactly this
 valid file. A separate test confirms that domain/sort validation remains active
 when congruence itself is off.
 
+A final three-round release-mode run again found zero acceptance and exact
+diagnostic differences. Median full-corpus time was 8,363.208 ms for direct
+SMT and 10,421.700 ms for Fixedpoint plus fallback, making the direct path
+about 19.8% faster. The Fixedpoint branch, its selector APIs, quantifier
+construction, and variable collector were then deleted. The pre-deletion
+differential remains reproducible at commit `8479e6c`; keeping an inert runtime
+abstraction on the current branch is not required for reproducibility.
+
 Static use analysis also found abstractions with no verifier consumer:
 
 - `FunctionSignature.type_parameters`;
@@ -199,7 +214,8 @@ Static use analysis also found abstractions with no verifier consumer:
   ResultElementsSubsetOfReceiver}` (explicit no-op match arms);
 - `ReceiverEffect::Read` versus no receiver effect;
 - `writes_ambient_state` for APIs without a receiver;
-- private dead helpers `number_pair`, `number_compare`, and `as_number_term`.
+- private dead helpers `number_pair`, `number_compare`, and `as_number_term`
+  (now deleted after a zero-consumer search and the full RT suite).
 
 A zero delta for these fields currently means “unimplemented or uncovered”,
 not “their semantics are preserved for free”. Remove them or first add a real
@@ -241,11 +257,11 @@ Other integration contradictions:
   emoji before a call, the same source position can be reported as columns 24,
   25, or 27 depending on the producer.
 
-The next integration experiment needs explicit `checker in {own, rt, all}`,
-`compiler in {off, explicit}`, and one unified platform profile. Each cell must
-record own/rt/TS/provider diagnostics separately, parse count, and wall time.
-Until then, the unified CLI exit code is not a valid outcome metric for either
-checker.
+This motivated an executable matrix with explicit
+`checker in {own, rt, all}`, compiler mode, and separate ownership-runtime and
+refinement-target axes. Each cell records own/rt/TS/provider diagnostics,
+frontend parse count, and wall time. The unified CLI exit code remains a
+compatibility observation, not an outcome metric for either checker.
 
 ### Checker-selection intervention
 
@@ -270,3 +286,27 @@ TypeScript gate is started. These results prove that checker selection removes
 cross-checker pollution; they also show why `all` cannot be used to estimate
 either checker's precision. Platform coupling and the default `all` policy
 remain separate hypotheses.
+
+### Executable integration matrix
+
+`cargo run -p pragmajs --example ablation` now evaluates 19 labeled cells with
+a deterministic injected compiler provider, so it does not depend on an
+installed Corsa binary. All cells reuse one frontend parse and preserve the
+five diagnostic producers as separate CSV columns.
+
+| Contrast | Producer counts / result |
+|---|---|
+| same cross-checker fixture under own / rt / all | `(own, rt) = (1,0) / (0,1) / (1,1)` |
+| invalid refinement, compiler off / compiler error | `(rt, compiler) = (1,0) / (0,1)`; compiler error short-circuits verification |
+| own-only with explicit compiler error | compiler diagnostic is observable, but compatibility `combined_failed` remains false |
+| sparse RT, off / supplied evidence | RT diagnostics `2 -> 0` |
+| sparse ownership, off / supplied evidence | ownership diagnostics `2 -> 1`; missing type disappears but the real forget remains |
+| Bun source: node runtime x node target | `(own, rt) = (0,1)` |
+| Bun source: bun runtime x node target | `(1,1)` |
+| Bun source: node runtime x bun target | `(0,0)`, demonstrating the silent ownership hole |
+| Bun source: bun runtime x bun target | `(1,0)` |
+
+The platform 2x2 proves that `runtime` and `target` are independent knobs even
+though users normally intend one platform. A unified profile is the next
+intervention; the mismatched cells remain in the matrix as regression
+controls.
