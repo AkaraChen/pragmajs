@@ -124,7 +124,11 @@ pub fn detect_environment(source: &str, file_name: &str) -> Result<Environment, 
     let parsed = parse(&allocator, file_name, source);
     if !parsed.diagnostics.is_empty() {
         return Err(EnvironmentError::Parse {
-            diagnostics: parsed.diagnostics,
+            diagnostics: parsed
+                .diagnostics
+                .iter()
+                .map(|diagnostic| format!("{diagnostic:?}"))
+                .collect(),
         });
     }
     detect_environment_from_program(&parsed.program)

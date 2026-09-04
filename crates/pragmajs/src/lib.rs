@@ -12,7 +12,7 @@ use pragma_own::{
     check_parsed_with, check_parsed_with_payloads, omitted_payload_offsets, own_payload_name,
     CheckResult, Runtime,
 };
-use pragma_parse::{parse, Allocator, Parsed};
+use pragma_parse::{parse, Allocator, ParseDiagnostic, Parsed};
 use pragma_rt::prelude::Environment;
 use pragma_rt::syntax::{Annotation, RtError};
 use pragma_rt::type_provider::{
@@ -183,7 +183,7 @@ impl From<io::Error> for CombinedError {
 #[derive(Debug, Clone)]
 pub struct CombinedCheck {
     pub filename: String,
-    pub parse_diagnostics: Vec<String>,
+    pub parse_diagnostics: Vec<ParseDiagnostic>,
     pub own: CheckResult,
     pub rt: Vec<RtError>,
     pub rt_annotations: Vec<Annotation>,
@@ -205,7 +205,7 @@ impl CombinedCheck {
     pub fn formatted_lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for diagnostic in &self.parse_diagnostics {
-            lines.push(format!("{}: error: {diagnostic}", self.filename));
+            lines.push(format!("{}: error: {diagnostic:?}", self.filename));
         }
         lines.extend(self.own.formatted_lines());
         for error in &self.rt {

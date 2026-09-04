@@ -52,5 +52,6 @@ fails the runner instead of merely changing its text output. CSV output keeps
 parse, ownership, refinement, compiler, and provider diagnostics (including
 available locations) in separate columns instead of reducing a cell to the CLI
 exit code; it also records the frontend parse count and per-cell wall time.
-Frontend parse diagnostics remain message-only because `pragma-parse`
-currently exposes them as formatted strings rather than structured spans.
+Frontend parse diagnostics use their primary Oxc label, falling back to the
+first label when no primary label is present; diagnostics without labels remain
+message-only rather than receiving a synthetic position.

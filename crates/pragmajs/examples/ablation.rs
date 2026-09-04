@@ -1,8 +1,8 @@
 //! Reproducible integration matrix for checker, compiler, and platform axes.
 
-use pragma_loc::utf16_offset_to_line_col;
+use pragma_loc::{byte_offset_to_line_col, utf16_offset_to_line_col};
 use pragma_own::Runtime;
-use pragma_parse::{parse, Allocator};
+use pragma_parse::{diagnostic_span, parse, Allocator, ParseDiagnostic};
 use pragma_rt::prelude::Environment;
 use pragma_rt::type_provider::{
     utf16_offset_for_byte_offset, CompilerDiagnostic, CompilerDiagnosticKind,
@@ -378,6 +378,16 @@ fn target_name(target: Environment) -> &'static str {
     }
 }
 
+fn observe_parse_diagnostic(source: &str, diagnostic: &ParseDiagnostic) -> ObservedDiagnostic {
+    let message = format!("{diagnostic:?}");
+    if let Some(span) = diagnostic_span(diagnostic) {
+        let (line, column) = byte_offset_to_line_col(source, span.start);
+        ObservedDiagnostic::at(message, line, column)
+    } else {
+        ObservedDiagnostic::without_location(message)
+    }
+}
+
 fn observe_check(
     cell: &Cell,
     source: &str,
@@ -425,8 +435,8 @@ fn observe_check(
         .collect();
     let parse_diagnostics = check
         .parse_diagnostics
-        .into_iter()
-        .map(ObservedDiagnostic::without_location)
+        .iter()
+        .map(|diagnostic| observe_parse_diagnostic(source, diagnostic))
         .collect();
     observation(
         cell,
@@ -521,8 +531,7 @@ fn evaluate(cell: &Cell) -> Result<Observation, String> {
                 parsed
                     .diagnostics
                     .iter()
-                    .cloned()
-                    .map(ObservedDiagnostic::without_location)
+                    .map(|diagnostic| observe_parse_diagnostic(&source, diagnostic))
                     .collect(),
                 Vec::new(),
                 Vec::new(),

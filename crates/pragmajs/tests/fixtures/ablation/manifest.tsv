@@ -26,3 +26,4 @@ profile-bun	platform-bun.js	all	off	bun	-	-	0	1	0	0	0	true
 unicode-own-off	unicode-locations.js	own	off	-	none	ecmascript	0	1	0	0	0	true	own=1:75
 unicode-rt-off	unicode-locations.js	rt	off	-	none	ecmascript	0	0	1	0	0	true	rt=2:87
 unicode-compiler-explicit	unicode-locations.js	all	explicit	-	none	ecmascript	0	1	0	1	0	true	own=1:75;compiler=3:10
+unicode-parse-off	unicode-parse.js	own	off	-	none	ecmascript	1	0	0	0	0	true	parse=1:26

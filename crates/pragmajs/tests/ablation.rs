@@ -13,7 +13,7 @@ fn named<'a>(observations: &'a [Observation], name: &str) -> &'a Observation {
 #[test]
 fn integration_matrix_matches_gold_and_keeps_producers_separate() {
     let observations = run_matrix().expect("integration matrix should run without Corsa");
-    assert_eq!(observations.len(), 27, "unexpected matrix size");
+    assert_eq!(observations.len(), 28, "unexpected matrix size");
     assert!(
         observations
             .iter()
@@ -145,6 +145,15 @@ fn unicode_cells_gold_check_scalar_locations_from_every_structured_producer() {
             compiler.compiler_diagnostics[0].column,
         ),
         (Some(3), Some(10))
+    );
+
+    let parse = named(&observations, "unicode-parse-off");
+    assert_eq!(
+        (
+            parse.parse_diagnostics[0].line,
+            parse.parse_diagnostics[0].column,
+        ),
+        (Some(1), Some(26))
     );
 }
 

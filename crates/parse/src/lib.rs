@@ -2,10 +2,11 @@
 
 use oxc::parser::{ParseOptions, Parser};
 use oxc::semantic::SemanticBuilder;
-use oxc::span::SourceType;
+use oxc::span::{Span, SourceType};
 
 pub use oxc::allocator::Allocator;
 pub use oxc::ast::ast::Program;
+pub use oxc::diagnostics::OxcDiagnostic as ParseDiagnostic;
 pub use oxc::semantic::Semantic;
 
 /// SourceType from a filename. Module mode is always on (both checkers treat
@@ -29,8 +30,8 @@ pub fn source_type_for_path(filename: &str) -> SourceType {
 
 pub struct Parsed<'a> {
     pub program: Program<'a>,
-    /// Stringified oxc diagnostics. Callers decide whether they fail the file.
-    pub diagnostics: Vec<String>,
+    /// Structured Oxc diagnostics. Callers decide whether they fail the file.
+    pub diagnostics: Vec<ParseDiagnostic>,
 }
 
 pub fn parse<'a>(allocator: &'a Allocator, filename: &str, source: &'a str) -> Parsed<'a> {
@@ -40,12 +41,22 @@ pub fn parse<'a>(allocator: &'a Allocator, filename: &str, source: &'a str) -> P
         .parse();
     Parsed {
         program: ret.program,
-        diagnostics: ret
-            .diagnostics
-            .iter()
-            .map(|d| format!("{d:?}"))
-            .collect(),
+        diagnostics: ret.diagnostics.into_vec(),
     }
+}
+
+/// Select a diagnostic's primary source span, falling back to its first label.
+///
+/// Oxc offsets are zero-based UTF-8 byte offsets. A diagnostic without labels
+/// has no source span and is returned as `None` rather than being assigned a
+/// synthetic position.
+pub fn diagnostic_span(diagnostic: &ParseDiagnostic) -> Option<Span> {
+    diagnostic
+        .labels
+        .iter()
+        .find(|label| label.primary())
+        .or_else(|| diagnostic.labels.first())
+        .map(|label| label.span())
 }
 
 pub fn semantic_graph<'a>(program: &'a Program<'a>) -> Semantic<'a> {
