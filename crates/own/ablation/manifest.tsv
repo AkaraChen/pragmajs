@@ -39,6 +39,7 @@ fixtures/reject-assignment-loses-ownership.js	REJECT:unique-forget
 fixtures/reject-aggregate-store-forget.js	REJECT:unique-forget
 fixtures/reject-optional-call-then-reuse.js	REJECT:use-after-move
 fixtures/accept-known-optional-call-only.js	ACCEPT
+fixtures/reject-unknown-optional-method-only.js	REJECT:unique-forget
 fixtures/accept-local-drop-directive.js	ACCEPT
 fixtures/reject-local-kind-directive.js	REJECT:unique-forget
 fixtures/reject-local-let-directive.js	REJECT:unique-forget

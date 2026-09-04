@@ -67,15 +67,15 @@ fn runtime_prelude_ablation_has_an_observed_witness() {
 }
 
 #[test]
-fn optional_call_path_ablation_exposes_conditional_consume() {
+fn optional_call_path_ablation_is_callee_sensitive() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let path = root.join("ablation/fixtures/reject-optional-call-then-reuse.js");
     let source = fs::read_to_string(&path).unwrap();
 
     assert_eq!(
         outcome(&path, &source, OwnFeatures::all(), Runtime::Node),
-        Vec::<&'static str>::new(),
-        "the default optional-call path approximation should preserve existing behavior",
+        vec!["use-after-move"],
+        "a definitely bound local function cannot skip its call",
     );
     assert_eq!(
         outcome(
@@ -92,8 +92,8 @@ fn optional_call_path_ablation_exposes_conditional_consume() {
     let source = fs::read_to_string(&path).unwrap();
     assert_eq!(
         outcome(&path, &source, OwnFeatures::all(), Runtime::Node),
-        vec!["unique-forget"],
-        "the syntax-only path split currently invents an infeasible skipped branch",
+        Vec::<&'static str>::new(),
+        "the known local consumer should discharge the unique obligation",
     );
     assert_eq!(
         outcome(
@@ -104,6 +104,24 @@ fn optional_call_path_ablation_exposes_conditional_consume() {
         ),
         Vec::<&'static str>::new(),
         "the ablation should accept a call of a definitely bound local function",
+    );
+
+    let path = root.join("ablation/fixtures/reject-unknown-optional-method-only.js");
+    let source = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        outcome(&path, &source, OwnFeatures::all(), Runtime::Node),
+        vec!["unique-forget"],
+        "an unknown optional method needs the branch where the call is skipped",
+    );
+    assert_eq!(
+        outcome(
+            &path,
+            &source,
+            OwnFeatures::without(OwnAblation::OptionalCallPaths),
+            Runtime::Node,
+        ),
+        Vec::<&'static str>::new(),
+        "treating an unknown optional method as definite must expose the ablation",
     );
 }
 

@@ -2470,6 +2470,12 @@ struct VarEntry {
     ty_name: String,
 }
 
+#[derive(Debug, Clone)]
+struct ScopeBinding {
+    name: String,
+    shadowed: Option<VarEntry>,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Apps {
     consumed: u32,
@@ -2511,7 +2517,7 @@ struct Checker<'a> {
     file: &'a FileCtx<'a>,
     diags: Vec<Diagnostic>,
     tbl: HashMap<String, VarEntry>,
-    scopes: Vec<Vec<String>>,
+    scopes: Vec<Vec<ScopeBinding>>,
     suppress_consume: Option<String>,
     loop_depth: u32,
     fn_ret: Option<OwnType>,
@@ -2563,17 +2569,20 @@ impl Checker<'_> {
     }
 
     fn pop_scope(&mut self) {
-        let names = self.scopes.pop().unwrap_or_default();
-        for name in names.into_iter().rev() {
-            self.remove_var(&name);
+        let bindings = self.scopes.pop().unwrap_or_default();
+        for binding in bindings.into_iter().rev() {
+            self.remove_var(&binding.name);
+            if let Some(entry) = binding.shadowed {
+                self.tbl.insert(binding.name, entry);
+            }
         }
     }
 
     fn add_var(&mut self, name: String, entry: VarEntry) {
+        let shadowed = self.tbl.insert(name.clone(), entry);
         if let Some(scope) = self.scopes.last_mut() {
-            scope.push(name.clone());
+            scope.push(ScopeBinding { name, shadowed });
         }
-        self.tbl.insert(name, entry);
     }
 
     fn remove_var(&mut self, name: &str) {
@@ -5251,7 +5260,9 @@ impl Checker<'_> {
             Expression::ParenthesizedExpression(p) => self.count(&p.expression, name),
             Expression::ChainExpression(c) => match &c.expression {
                 oxc::ast::ast::ChainElement::CallExpression(call) => {
-                    if !self.features.optional_call_paths {
+                    if !self.features.optional_call_paths
+                        || self.optional_call_has_definite_callee(call)
+                    {
                         return self.count_call(call, name);
                     }
                     // Optional calls may not run; do not definite-consume this/args.
@@ -5366,6 +5377,11 @@ impl Checker<'_> {
             }
             _ => Apps::default(),
         }
+    }
+
+    fn optional_call_has_definite_callee(&self, call: &CallExpression<'_>) -> bool {
+        !callee_has_optional_access(&call.callee)
+            && callee_name(&call.callee).is_some_and(|name| self.callee_sig(&name).is_some())
     }
 
     fn count_assignment_target(&self, t: &oxc::ast::ast::AssignmentTarget<'_>, name: &str) -> Apps {
@@ -7132,6 +7148,21 @@ fn callee_name(expr: &Expression<'_>) -> Option<String> {
         _ => return None,
     };
     Some(strip_global_prefix(&name))
+}
+
+fn callee_has_optional_access(expr: &Expression<'_>) -> bool {
+    match peel(expr) {
+        Expression::StaticMemberExpression(member) => {
+            member.optional || callee_has_optional_access(&member.object)
+        }
+        Expression::ComputedMemberExpression(member) => {
+            member.optional || callee_has_optional_access(&member.object)
+        }
+        Expression::PrivateFieldExpression(member) => {
+            member.optional || callee_has_optional_access(&member.object)
+        }
+        _ => false,
+    }
 }
 
 fn prop_key_name(key: &oxc::ast::ast::PropertyKey<'_>) -> Option<String> {

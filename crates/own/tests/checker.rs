@@ -97,6 +97,33 @@ fn unique_consume_ok() {
 }
 
 #[test]
+fn shadowed_owned_binding_is_restored_after_inner_scope() {
+    let src = r#"/*#own type: (resource: unique Resource) => void */
+function forgetOuter(resource) {
+  {
+    /*#own let resource: unique Resource */
+    const resource = {};
+    void resource;
+  }
+}
+"#;
+    let result = check_source("test.js", src);
+    let forgets: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.kind == RuleKind::UniqueForget)
+        .collect();
+
+    assert_eq!(
+        forgets.len(),
+        1,
+        "the consumed inner binding must not hide the forgotten outer binding: {:?}",
+        result.formatted_lines(),
+    );
+    assert_eq!(forgets[0].line_col(src).0, 2);
+}
+
+#[test]
 fn affine_drop_ok() {
     let src = r#"
 /*#own type: (f: affine File) => void */
@@ -1316,7 +1343,7 @@ const f = () => Buffer.from("x");
 }
 
 #[test]
-fn optional_call_does_not_definite_consume() {
+fn optional_call_of_known_local_function_definitely_consumes() {
     let src = r#"
 /*#own type: (buf: unique Buffer) => void */
 function consume(buf) { void buf; }
@@ -1328,8 +1355,8 @@ function process(buf) {
 "#;
     let r = check_source("test.js", src);
     assert!(
-        !r.kinds().contains(&RuleKind::UseAfterMove),
-        "optional consume then consume: {:?}",
+        r.kinds().contains(&RuleKind::UseAfterMove),
+        "a known local consumer cannot be skipped: {:?}",
         r.formatted_lines()
     );
 }
