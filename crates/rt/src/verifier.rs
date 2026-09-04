@@ -6145,18 +6145,6 @@ fn zterm_as_number(term: ZTerm) -> Result<Float, String> {
     }
 }
 
-#[allow(dead_code)]
-fn as_number_term(term: &Term) -> Term {
-    match term.sort() {
-        Sort::Number => term.clone(),
-        Sort::Int => match term {
-            Term::Int(value) => Term::Number(*value),
-            _ => Term::ToNumber(Box::new(term.clone())),
-        },
-        _ => term.clone(),
-    }
-}
-
 fn as_int_term(term: &Term) -> Option<Term> {
     match term {
         Term::Int(_) => Some(term.clone()),
@@ -6546,30 +6534,6 @@ fn collect_assigned_expression(expression: &Expression<'_>, names: &mut HashSet<
             collect_assigned_expression(&parenthesized.expression, names);
         }
         _ => {}
-    }
-}
-
-#[allow(dead_code)]
-fn number_pair(
-    left: &Term,
-    right: &Term,
-    operation: impl FnOnce(Float, Float) -> Float,
-) -> Result<ZTerm, String> {
-    match (to_z3(left)?, to_z3(right)?) {
-        (ZTerm::Number(left), ZTerm::Number(right)) => Ok(ZTerm::Number(operation(left, right))),
-        _ => Err("Arithmetic requires number operands".into()),
-    }
-}
-
-#[allow(dead_code)]
-fn number_compare(
-    left: &Term,
-    right: &Term,
-    operation: impl FnOnce(&Float, &Float) -> Bool,
-) -> Result<ZTerm, String> {
-    match (to_z3(left)?, to_z3(right)?) {
-        (ZTerm::Number(left), ZTerm::Number(right)) => Ok(ZTerm::Bool(operation(&left, &right))),
-        _ => Err("Ordered comparison requires number operands".into()),
     }
 }
 
