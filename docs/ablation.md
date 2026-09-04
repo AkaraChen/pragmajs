@@ -37,27 +37,28 @@ ABLATION_ROUNDS=5 cargo run -p pragma-rt --example ablation
 
 ## Ownership: first OAT screen
 
-Corpus: 37 cases: 17 `ACCEPT`, 18 `REJECT`, and 2 `OUT_OF_DOMAIN`.
+Corpus: 38 cases: 17 `ACCEPT`, 19 `REJECT`, and 2 `OUT_OF_DOMAIN`.
 The manifest is [`crates/own/ablation/manifest.tsv`](../crates/own/ablation/manifest.tsv).
 
 | Variant | Valid kept | Lost valid | Invalid caught | Escaped invalid | Reason changed | OOD guarded | Changed cases |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| baseline | 14 | 3 | 14 | 4 | 0 | 2 | 0 |
-| no function contracts | 14 | 3 | 1 | 15 | 2 | 1 | 18 |
-| no move tracking | 16 | 1 | 0 | 16 | 2 | 1 | 19 |
-| no exact-once | 15 | 2 | 11 | 7 | 0 | 2 | 8 |
-| no affine kind | 14 | 3 | 13 | 5 | 0 | 2 | 1 |
-| no borrow model | 13 | 4 | 9 | 6 | 3 | 2 | 6 |
-| no local directives | 12 | 5 | 12 | 4 | 2 | 2 | 4 |
-| no local callee contracts | 14 | 3 | 13 | 5 | 0 | 2 | 1 |
-| no owned-return propagation | 15 | 2 | 12 | 6 | 0 | 2 | 3 |
-| no instance dispatch | 13 | 4 | 14 | 4 | 0 | 2 | 1 |
-| no control-flow splitting | 13 | 4 | 13 | 5 | 0 | 2 | 2 |
-| no loop depth | 14 | 3 | 13 | 5 | 0 | 2 | 1 |
-| no non-consuming paths | 13 | 4 | 14 | 4 | 0 | 2 | 3 |
-| no unknown-call conservatism | 14 | 3 | 13 | 5 | 0 | 2 | 1 |
-| no unmapped guards | 15 | 2 | 14 | 4 | 0 | 0 | 3 |
-| no runtime prelude | 13 | 4 | 13 | 5 | 0 | 2 | 4 |
+| baseline | 14 | 3 | 14 | 5 | 0 | 2 | 0 |
+| no function contracts | 14 | 3 | 1 | 16 | 2 | 1 | 18 |
+| no move tracking | 16 | 1 | 0 | 17 | 2 | 1 | 19 |
+| no exact-once | 15 | 2 | 11 | 8 | 0 | 2 | 8 |
+| no affine kind | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
+| no borrow model | 13 | 4 | 9 | 7 | 3 | 2 | 6 |
+| no local directives | 12 | 5 | 12 | 5 | 2 | 2 | 4 |
+| no local callee contracts | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
+| no owned-return propagation | 15 | 2 | 12 | 7 | 0 | 2 | 3 |
+| no instance dispatch | 13 | 4 | 14 | 5 | 0 | 2 | 1 |
+| no control-flow splitting | 13 | 4 | 13 | 6 | 0 | 2 | 2 |
+| no loop depth | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
+| no non-consuming paths | 13 | 4 | 15 | 4 | 0 | 2 | 4 |
+| no unknown-call conservatism | 14 | 3 | 13 | 6 | 0 | 2 | 1 |
+| no optional-call paths | 14 | 3 | 15 | 4 | 0 | 2 | 1 |
+| no unmapped guards | 15 | 2 | 14 | 5 | 0 | 0 | 3 |
+| no runtime prelude | 13 | 4 | 13 | 6 | 0 | 2 | 4 |
 
 Every implemented axis changes at least one case. The small improvements in
 `valid kept` are not wins: for example, disabling move tracking removes false
@@ -76,6 +77,11 @@ The important positive evidence is bidirectional:
 - loop definition depth, local call effects, owned returns, instance receiver
   effects, unknown-call conservatism, and the runtime prelude each have a
   direct witness;
+- treating every optional call as a non-consuming path is too coarse: when the
+  callee is a known local function, `consume?.(value)` must consume on the only
+  feasible path. Removing the approximation catches one existing false
+  negative, so the replacement must use callee nullability rather than delete
+  optional-call splitting globally;
 - `Apps.path` is a composite abstraction (member heads, Copy/ref arguments,
   known variadics, and optional calls), so its row cannot identify which path
   source is valuable.
@@ -121,8 +127,9 @@ fixture under `crates/own/ablation/fixtures`.
 | name-only capture scan | false positive | an arrow parameter shadowing an outer owned name is reported as a capture |
 | file-global `HashMap<String, FnSig>` | false positive | a nested same-name function overwrites an unrelated top-level callee contract |
 | overload collapse + `is_fs_readfile_callback` | false positive | callback `fs.readFile` bound to a variable is modeled as returning a unique `Buffer` |
+| unconditional optional-call path splitting | false negative | optional call of a definitely bound local consumer is treated as if it could be skipped |
 
-The observed baseline is therefore 14/17 valid cases retained and 14/18
+The observed baseline is therefore 14/17 valid cases retained and 14/19
 invalid cases caught. The legacy `pragma-own` suite still passes (123 tests),
 which demonstrates why its mostly `contains(...)` assertions cannot serve as
 precision/recall gold.
@@ -140,15 +147,16 @@ Replacement experiments, in order:
 
 ## Refinements: Fixedpoint ablation
 
-The current solver path atomizes abstract predicates, builds one non-recursive
-Horn rule for `assumptions => consequent`, asks Z3 Fixedpoint, and still falls
-back to quantifier-free SMT for `Unsat` or `Unknown`. The ablation keeps the
+The original solver path atomized abstract predicates, built one non-recursive
+Horn rule for `assumptions => consequent`, asked Z3 Fixedpoint, and still fell
+back to quantifier-free SMT for `Unsat` or `Unknown`. The ablation kept the
 same predicate atomization, congruence constraints, and Int-to-Number axioms,
-but sends the implication directly to SMT.
+but sent the implication directly to SMT.
 
-Corpus: all 33 Flux positive + 67 Flux negative + 7 prelude positive + 25
-prelude negative fixtures (132 total), without Corsa. Timing is the median of
-three full-corpus runs and includes equal parsing overhead.
+The pre-intervention corpus contained 33 Flux positive, 67 Flux negative,
+7 prelude positive, and 25 prelude negative fixtures (132 total), without
+Corsa. Timing is the median of three full-corpus runs and includes equal
+parsing overhead.
 
 | Solver | Valid kept | Lost valid | Invalid caught | Escaped invalid | Median |
 |---|---:|---:|---:|---:|---:|
@@ -156,27 +164,32 @@ three full-corpus runs and includes equal parsing overhead.
 | direct SMT | 40 | 0 | 92 | 0 | 9,234.629 ms |
 
 Acceptance changes: **0**. Exact diagnostic-list changes: **0**. Direct SMT
-was 9.86% faster in this run. This is strong evidence to delete the Fixedpoint
-layer, subject to repeating the timing on CI and adding solver-call counters;
-it is not a claim about workloads outside this corpus.
+was 9.86% faster in this run. Direct SMT is now the production default; the
+legacy Fixedpoint backend remains explicitly selectable by the runner so the
+differential experiment stays reproducible. Deleting that backend is deferred
+until CI/release-mode repetitions and solver-call counters cover worst-case
+latency and `Unknown` behavior outside this corpus.
 
-Two additional solver assumptions use the same 132-file corpus. A one-round
-rerun (timing is noisier than the three-round table above) produced:
+The congruence experiment added one directed positive fixture, bringing the
+current corpus to 133 files. A one-round rerun (timing is noisier than the
+three-round table above) produced:
 
 | Configuration | Valid kept | Lost valid | Invalid caught | Escaped invalid | Exact diagnostic lists changed |
 |---|---:|---:|---:|---:|---:|
-| baseline | 40 | 0 | 92 | 0 | 0 |
-| no Int-to-Number conversion axioms | 33 | 7 | 92 | 0 | 14 |
-| no abstract-predicate congruence | 40 | 0 | 92 | 0 | 0 |
+| direct SMT (production) | 41 | 0 | 92 | 0 | 0 |
+| Fixedpoint + SMT fallback (legacy) | 41 | 0 | 92 | 0 | 0 |
+| no Int-to-Number conversion axioms | 34 | 7 | 92 | 0 | 14 |
+| no abstract-predicate congruence | 40 | 1 | 92 | 0 | 1 |
 
-The conversion bridge is not removable: without it, seven valid programs are
-rejected, spanning constant branches, dense arrays, polymorphism, vector
-literals, and the common Array prelude. Predicate congruence is different: a
-directed solver test proves it matters for `x same y && p(x) => p(y)`, and a
-second test proves domain/sort validation remains active when congruence is
-off, but no end-to-end corpus file exercises that law. Its zero delta is a
-coverage failure, not deletion evidence; a labeled end-to-end witness is now
-required before deciding its fate.
+Direct SMT took 9,350.866 ms versus 11,262.790 ms for the legacy path in this
+run (about 17.0% faster), again with identical diagnostics. The conversion
+bridge is not removable: without it, seven valid programs are rejected,
+spanning constant branches, dense arrays, polymorphism, vector literals, and
+the common Array prelude. Predicate congruence is also necessary: the new
+parser-to-checker witness establishes `p(x)`, aliases boolean `y` to `x`, and
+returns `y` under the contract `p($)`. Removing congruence rejects exactly this
+valid file. A separate test confirms that domain/sort validation remains active
+when congruence itself is off.
 
 Static use analysis also found abstractions with no verifier consumer:
 
