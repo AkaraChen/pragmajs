@@ -3861,10 +3861,7 @@ impl Verifier<'_> {
                             Box::new(last),
                         ));
                     }
-                    SemanticRefinement::TypeGuard { .. }
-                    | SemanticRefinement::ResultElementsFromCallback { .. }
-                    | SemanticRefinement::ResultElementsSubsetOfReceiver
-                    | SemanticRefinement::ReceiverMayContainArguments => {}
+                    SemanticRefinement::ReceiverMayContainArguments => {}
                 }
             }
         }

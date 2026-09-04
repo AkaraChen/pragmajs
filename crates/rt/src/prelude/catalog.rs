@@ -114,11 +114,7 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
         FunctionSignature::new(
             vec![LibraryParameter::required("x", primitive_type("unknown"))],
             primitive_type("boolean"),
-        )
-        .with_refinements(vec![SemanticRefinement::TypeGuard {
-            parameter_index: 0,
-            narrowed_to: BaseType::Array(Box::new(primitive("unknown"))),
-        }]),
+        ),
     );
     registry.add_static_function(
         "Array.from",
@@ -135,11 +131,7 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
         FunctionSignature::new(
             vec![LibraryParameter::required("x", primitive_type("unknown"))],
             primitive_type("boolean"),
-        )
-        .with_refinements(vec![SemanticRefinement::TypeGuard {
-            parameter_index: 0,
-            narrowed_to: primitive("number"),
-        }]),
+        ),
     );
     registry.add_static_function(
         "Number.isFinite",
@@ -149,11 +141,7 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
                 primitive_type("unknown"),
             )],
             primitive_type("boolean"),
-        )
-        .with_refinements(vec![SemanticRefinement::TypeGuard {
-            parameter_index: 0,
-            narrowed_to: primitive("number"),
-        }]),
+        ),
     );
     registry.add_static_function(
         "parseInt",
@@ -171,7 +159,6 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
         "length",
         PropertySignature {
             ty: non_negative_number(),
-            readonly: false,
         },
     );
     registry.add_receiver_property(
@@ -179,7 +166,6 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
         "length",
         PropertySignature {
             ty: non_negative_number(),
-            readonly: true,
         },
     );
     add_array_methods(registry);
@@ -224,12 +210,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
         )
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate))
-        .with_refinements(vec![
-            SemanticRefinement::ResultLengthEqualsReceiver,
-            SemanticRefinement::ResultElementsFromCallback {
-                callback_parameter: 0,
-            },
-        ]),
+        .with_refinements(vec![SemanticRefinement::ResultLengthEqualsReceiver]),
     );
 
     let predicate_callback = callback_type(
@@ -252,10 +233,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
         )
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate))
-        .with_refinements(vec![
-            SemanticRefinement::ResultLengthAtMostReceiver,
-            SemanticRefinement::ResultElementsSubsetOfReceiver,
-        ]),
+        .with_refinements(vec![SemanticRefinement::ResultLengthAtMostReceiver]),
     );
     for method in ["every", "some"] {
         registry.add_receiver_method(
@@ -479,7 +457,6 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
         "status",
         PropertySignature {
             ty: non_negative_number(),
-            readonly: true,
         },
     );
     registry.add_receiver_property(
@@ -487,7 +464,6 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
         "ok",
         PropertySignature {
             ty: primitive_type("boolean"),
-            readonly: true,
         },
     );
     registry.add_receiver_method(
@@ -566,7 +542,6 @@ fn add_dom(registry: &mut LibraryRegistry) {
             "length",
             PropertySignature {
                 ty: non_negative_number(),
-                readonly: true,
             },
         );
     }
@@ -575,7 +550,6 @@ fn add_dom(registry: &mut LibraryRegistry) {
         "childElementCount",
         PropertySignature {
             ty: non_negative_number(),
-            readonly: true,
         },
     );
     registry.add_receiver_property(
@@ -583,7 +557,6 @@ fn add_dom(registry: &mut LibraryRegistry) {
         "children",
         PropertySignature {
             ty: named_type("HTMLCollection"),
-            readonly: true,
         },
     );
     registry.add_receiver_property(
@@ -591,7 +564,6 @@ fn add_dom(registry: &mut LibraryRegistry) {
         "textContent",
         PropertySignature {
             ty: nullable_type(primitive("string")),
-            readonly: false,
         },
     );
     registry.add_receiver_method(
@@ -616,7 +588,6 @@ fn add_dom(registry: &mut LibraryRegistry) {
         "body",
         PropertySignature {
             ty: nullable_type(named("HTMLElement")),
-            readonly: true,
         },
     );
 
@@ -724,7 +695,6 @@ fn add_node_globals(registry: &mut LibraryRegistry) {
             "length",
             PropertySignature {
                 ty: non_negative_number(),
-                readonly: true,
             },
         );
     }
@@ -733,7 +703,6 @@ fn add_node_globals(registry: &mut LibraryRegistry) {
         "argv",
         PropertySignature {
             ty: array_type(primitive("string")),
-            readonly: true,
         },
     );
 
@@ -768,11 +737,7 @@ fn add_node_globals(registry: &mut LibraryRegistry) {
                 primitive_type("unknown"),
             )],
             primitive_type("boolean"),
-        )
-        .with_refinements(vec![SemanticRefinement::TypeGuard {
-            parameter_index: 0,
-            narrowed_to: BaseType::Named("Buffer".into()),
-        }]),
+        ),
     );
     registry.add_static_function(
         "setTimeout",
@@ -987,7 +952,6 @@ fn add_deno(registry: &mut LibraryRegistry) {
         "args",
         PropertySignature {
             ty: array_type(primitive("string")),
-            readonly: true,
         },
     );
 
@@ -1019,7 +983,6 @@ fn add_bun(registry: &mut LibraryRegistry) {
         "version",
         PropertySignature {
             ty: primitive_type("string"),
-            readonly: true,
         },
     );
     registry.add_receiver_property(
@@ -1027,7 +990,6 @@ fn add_bun(registry: &mut LibraryRegistry) {
         "argv",
         PropertySignature {
             ty: array_type(primitive("string")),
-            readonly: true,
         },
     );
     registry.add_static_function(
@@ -1102,7 +1064,6 @@ fn add_bun(registry: &mut LibraryRegistry) {
         "size",
         PropertySignature {
             ty: non_negative_number(),
-            readonly: true,
         },
     );
     registry.add_receiver_property(
@@ -1110,7 +1071,6 @@ fn add_bun(registry: &mut LibraryRegistry) {
         "port",
         PropertySignature {
             ty: non_negative_number(),
-            readonly: true,
         },
     );
     registry.add_receiver_method(

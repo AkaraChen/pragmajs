@@ -1,4 +1,4 @@
-use crate::syntax::{BaseType, RefinementType};
+use crate::syntax::RefinementType;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::Environment;
@@ -92,16 +92,8 @@ impl Default for FunctionEffects {
 /// facts from a function's spelling.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticRefinement {
-    TypeGuard {
-        parameter_index: usize,
-        narrowed_to: BaseType,
-    },
     ResultLengthEqualsReceiver,
     ResultLengthAtMostReceiver,
-    ResultElementsFromCallback {
-        callback_parameter: usize,
-    },
-    ResultElementsSubsetOfReceiver,
     ReceiverLengthIncreasesByArgumentCount,
     /// Dense-array `pop`: the receiver must have a positive length index.
     RequiresPositiveReceiverLength,
@@ -151,7 +143,6 @@ impl FunctionSignature {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PropertySignature {
     pub ty: RefinementType,
-    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

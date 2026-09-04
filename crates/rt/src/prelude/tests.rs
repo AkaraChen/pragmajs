@@ -112,14 +112,6 @@ fn ecmascript_catalog_exposes_generic_array_contracts_and_refinements() {
     assert!(reduce.iter().any(|overload| overload.parameters.len() == 1));
     assert!(reduce.iter().any(|overload| overload.parameters.len() == 2));
 
-    let is_array = &catalog.static_function("Array.isArray").unwrap()[0];
-    assert!(matches!(
-        is_array.refinements.as_slice(),
-        [SemanticRefinement::TypeGuard {
-            parameter_index: 0,
-            narrowed_to: BaseType::Array(_),
-        }]
-    ));
     for path in ["Math.sqrt", "Math.abs", "Array.isArray", "Number.isInteger"] {
         assert!(
             catalog.static_function(path).is_some(),
