@@ -80,18 +80,8 @@ pub fn analyze_source(
     )
 }
 
-/// Like [`analyze_source`], using a program already produced by `pragma_parse`.
-pub fn analyze_program(
-    provider: &dyn CompilerTypeProvider,
-    source: &str,
-    program: &Program<'_>,
-    config_path: &Path,
-    file_path: &Path,
-) -> Result<CompilerHints, CompilerTypeProviderError> {
-    analyze_program_with_offsets(provider, source, program, config_path, file_path, &[])
-}
-
-/// Like [`analyze_program`], also querying `extra_offsets` (omitted pragma bases).
+/// Like [`analyze_source`], using a program already produced by `pragma_parse`
+/// and also querying `extra_offsets` (omitted pragma bases).
 pub fn analyze_program_with_offsets(
     provider: &dyn CompilerTypeProvider,
     source: &str,
