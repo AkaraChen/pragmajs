@@ -5587,7 +5587,7 @@ fn base_contains_callable_preconditions(base: &BaseType) -> bool {
         BaseType::Object(fields) => fields
             .iter()
             .any(|(_, field)| base_contains_callable_preconditions(field)),
-        BaseType::Primitive(_) | BaseType::Named(_) => false,
+        BaseType::Primitive(_) | BaseType::Named(_) | BaseType::Omitted => false,
     }
 }
 
@@ -5644,7 +5644,7 @@ fn record_type_variable_provenance(
             }
             record_type_variable_provenance(&returns.base, local_implementation, bindings);
         }
-        BaseType::Primitive(_) | BaseType::Named(_) => {}
+        BaseType::Primitive(_) | BaseType::Named(_) | BaseType::Omitted => {}
     }
 }
 
@@ -5666,7 +5666,7 @@ fn type_variable_local_implementation(base: &BaseType, bindings: &HashMap<String
                 .any(|parameter| type_variable_local_implementation(&parameter.ty.base, bindings))
                 || type_variable_local_implementation(&returns.base, bindings)
         }
-        BaseType::Primitive(_) | BaseType::Named(_) => false,
+        BaseType::Primitive(_) | BaseType::Named(_) | BaseType::Omitted => false,
     }
 }
 
@@ -5684,6 +5684,7 @@ fn base_may_contain_local_implementation(base: &BaseType) -> bool {
         | BaseType::Object(_)
         | BaseType::Function(_, _)
         | BaseType::Named(_) => true,
+        BaseType::Omitted => false,
     }
 }
 
@@ -5696,6 +5697,7 @@ fn base_may_be_reference_identity(base: &BaseType) -> bool {
         | BaseType::Object(_)
         | BaseType::Function(_, _)
         | BaseType::Named(_) => true,
+        BaseType::Omitted => false,
     }
 }
 

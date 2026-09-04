@@ -19,7 +19,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use annot::{BorrowMode, FnSig, OwnDirective, OwnType};
-pub use check::check_program;
+pub use check::{
+    check_program, check_program_with_payloads, omitted_payload_offsets, own_payload_name,
+    PayloadNames,
+};
 pub use pragma_loc::offset_to_line_col;
 pub use prelude::Runtime;
 
@@ -37,6 +40,7 @@ pub enum RuleKind {
     BorrowEscape,
     UnmappedConstruct,
     AnnotParseError,
+    MissingType,
 }
 
 impl RuleKind {
@@ -53,6 +57,7 @@ impl RuleKind {
             RuleKind::BorrowEscape => "borrow-escape",
             RuleKind::UnmappedConstruct => "unmapped",
             RuleKind::AnnotParseError => "annot-parse",
+            RuleKind::MissingType => "missing-type",
         }
     }
 }
@@ -141,8 +146,19 @@ pub fn check_parsed_with(
     program: &pragma_parse::Program<'_>,
     runtime: Runtime,
 ) -> CheckResult {
+    check_parsed_with_payloads(filename, source, program, runtime, None)
+}
+
+/// Like [`check_parsed_with`], filling omitted payload names from `payloads`.
+pub fn check_parsed_with_payloads(
+    filename: &str,
+    source: &str,
+    program: &pragma_parse::Program<'_>,
+    runtime: Runtime,
+    payloads: Option<&dyn PayloadNames>,
+) -> CheckResult {
     CheckResult {
-        diagnostics: check_program(filename, source, program, runtime),
+        diagnostics: check_program_with_payloads(filename, source, program, runtime, payloads),
         sources: vec![(filename.to_string(), source.to_string())],
     }
 }

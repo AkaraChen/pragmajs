@@ -12,6 +12,46 @@ use oxc::span::GetSpan;
 use pragma_parse::{parse, Program};
 use std::collections::{HashMap, HashSet};
 
+/// Compiler-rendered TypeScript names for omitted `/*#own` payloads.
+pub trait PayloadNames {
+    fn name_at(&self, byte_offset: u32) -> Option<String>;
+}
+
+impl PayloadNames for HashMap<u32, String> {
+    fn name_at(&self, byte_offset: u32) -> Option<String> {
+        self.get(&byte_offset).cloned()
+    }
+}
+
+/// Last identifier in a compiler-rendered type (`Buffer`, `number`, …).
+pub fn own_payload_name(rendered: &str) -> Option<String> {
+    let rendered = rendered.trim();
+    if rendered.is_empty() {
+        return None;
+    }
+    let stripped = rendered
+        .trim_start_matches("typeof ")
+        .trim()
+        .split('|')
+        .next()
+        .unwrap_or(rendered)
+        .trim()
+        .split('<')
+        .next()
+        .unwrap_or(rendered)
+        .trim();
+    let name = stripped
+        .rsplit(['.', ' '])
+        .next()
+        .unwrap_or(stripped)
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_');
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
 pub fn check_source(filename: &str, source: &str, runtime: crate::Runtime) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
     let parsed = parse(&allocator, filename, source);
@@ -24,6 +64,17 @@ pub fn check_program(
     source: &str,
     program: &Program<'_>,
     runtime: crate::Runtime,
+) -> Vec<Diagnostic> {
+    check_program_with_payloads(path, source, program, runtime, None)
+}
+
+/// Like [`check_program`], filling omitted payload names from `payloads`.
+pub fn check_program_with_payloads(
+    path: &str,
+    source: &str,
+    program: &Program<'_>,
+    runtime: crate::Runtime,
+    payloads: Option<&dyn PayloadNames>,
 ) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let mut annots: HashMap<u32, Vec<AttachedOwn>> = HashMap::new();
@@ -40,6 +91,7 @@ pub fn check_program(
         annots,
         sigs: crate::prelude::signatures(runtime),
         ns_prefix: Vec::new(),
+        payloads,
     };
     file.collect_sigs_program(program);
     let mut checker = Checker {
@@ -58,6 +110,222 @@ pub fn check_program(
     checker.diags
 }
 
+/// Byte offsets whose omitted `/*#own` payloads should be queried from TypeScript.
+pub fn omitted_payload_offsets(
+    path: &str,
+    source: &str,
+    program: &Program<'_>,
+) -> Vec<u32> {
+    let mut diags = Vec::new();
+    let mut annots: HashMap<u32, Vec<AttachedOwn>> = HashMap::new();
+    for comment in program.comments.iter() {
+        let content = comment.content_span().source_text(source);
+        if let Some(att) = parse_own_comment(path, comment.span.start, content, &mut diags) {
+            annots.entry(comment.attached_to).or_default().push(att);
+        }
+    }
+    let mut offsets = Vec::new();
+    collect_omitted_offsets(program, &annots, &mut offsets);
+    offsets.sort();
+    offsets.dedup();
+    offsets
+}
+
+fn dirs_in(
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    offset: u32,
+) -> Vec<&OwnDirective> {
+    let mut out = Vec::new();
+    if let Some(atts) = annots.get(&offset) {
+        for a in atts {
+            for d in &a.directives {
+                out.push(d);
+            }
+        }
+    }
+    out
+}
+
+fn type_sig_in(annots: &HashMap<u32, Vec<AttachedOwn>>, offsets: &[u32]) -> Option<FnSig> {
+    for o in offsets {
+        for d in dirs_in(annots, *o) {
+            if let OwnDirective::Type(sig) = d {
+                return Some(sig.clone());
+            }
+        }
+    }
+    None
+}
+
+fn collect_omitted_offsets(
+    program: &Program<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+) {
+    for stmt in &program.body {
+        collect_omitted_stmt(stmt, annots, out, None);
+    }
+}
+
+fn collect_omitted_stmt(
+    stmt: &Statement<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+    extra: Option<u32>,
+) {
+    let extra = extra.into_iter().collect::<Vec<_>>();
+    match stmt {
+        Statement::FunctionDeclaration(f) => collect_omitted_fn(f, annots, out, &extra),
+        Statement::VariableDeclaration(v) => collect_omitted_var(v, annots, out, extra.first().copied()),
+        Statement::ExportDeclaration(e) => {
+            collect_omitted_stmt_decl(&e.declaration, annots, out, Some(e.span.start));
+        }
+        Statement::BlockStatement(b) => {
+            for s in &b.body {
+                collect_omitted_stmt(s, annots, out, None);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_omitted_stmt_decl(
+    decl: &oxc::ast::ast::Declaration<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+    extra: Option<u32>,
+) {
+    match decl {
+        oxc::ast::ast::Declaration::FunctionDeclaration(f) => {
+            let extra = extra.into_iter().collect::<Vec<_>>();
+            collect_omitted_fn(f, annots, out, &extra)
+        }
+        oxc::ast::ast::Declaration::VariableDeclaration(v) => {
+            collect_omitted_var(v, annots, out, extra)
+        }
+        _ => {}
+    }
+}
+
+fn collect_omitted_fn(
+    func: &Function<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+    extra: &[u32],
+) {
+    let mut offs = extra.to_vec();
+    offs.push(func.span.start);
+    if let Some(id) = &func.id {
+        offs.push(id.span.start);
+    }
+    if let Some(sig) = type_sig_in(annots, &offs) {
+        for (i, (_, ty)) in sig.params.iter().enumerate() {
+            if ty.payload_omitted() {
+                if let Some(p) = func.params.items.get(i) {
+                    out.push(p.span.start);
+                }
+            }
+        }
+        if sig.ret.payload_omitted() {
+            out.push(func.span.start);
+        }
+    }
+    if let Some(body) = &func.body {
+        for s in &body.statements {
+            collect_omitted_stmt(s, annots, out, None);
+        }
+    }
+}
+
+fn collect_omitted_arrow(
+    arrow: &ArrowFunctionExpression<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+    extra: &[u32],
+) {
+    let mut offs = extra.to_vec();
+    offs.push(arrow.span.start);
+    if let Some(sig) = type_sig_in(annots, &offs) {
+        for (i, (_, ty)) in sig.params.iter().enumerate() {
+            if ty.payload_omitted() {
+                if let Some(p) = arrow.params.items.get(i) {
+                    out.push(p.span.start);
+                }
+            }
+        }
+        if sig.ret.payload_omitted() {
+            out.push(arrow.span.start);
+        }
+    }
+}
+
+fn collect_omitted_init(
+    init: &Expression<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+    extra: &[u32],
+) {
+    match peel(init) {
+        Expression::FunctionExpression(func) => collect_omitted_fn(func, annots, out, extra),
+        Expression::ArrowFunctionExpression(arrow) => {
+            collect_omitted_arrow(arrow, annots, out, extra)
+        }
+        Expression::AssignmentExpression(assign) => {
+            collect_omitted_init(&assign.right, annots, out, extra)
+        }
+        Expression::SequenceExpression(seq) => {
+            if let Some(expr) = seq.expressions.last() {
+                collect_omitted_init(expr, annots, out, extra);
+            }
+        }
+        Expression::LogicalExpression(logical) => {
+            collect_omitted_init(&logical.left, annots, out, extra);
+            collect_omitted_init(&logical.right, annots, out, extra);
+        }
+        Expression::ConditionalExpression(cond) => {
+            collect_omitted_init(&cond.consequent, annots, out, extra);
+            collect_omitted_init(&cond.alternate, annots, out, extra);
+        }
+        _ => {}
+    }
+}
+
+fn collect_omitted_var(
+    decl: &VariableDeclaration<'_>,
+    annots: &HashMap<u32, Vec<AttachedOwn>>,
+    out: &mut Vec<u32>,
+    extra: Option<u32>,
+) {
+    for d in &decl.declarations {
+        let mut dirs: Vec<&OwnDirective> = dirs_in(annots, decl.span.start);
+        dirs.extend(dirs_in(annots, d.span.start));
+        let omitted_binding = dirs.iter().any(|dir| match dir {
+            OwnDirective::Let { ty, .. } | OwnDirective::Kind(ty) => ty.payload_omitted(),
+            _ => false,
+        });
+        if omitted_binding {
+            out.push(d.span.start);
+            if let Some(id) = ident_span(&d.id) {
+                out.push(id);
+            }
+        }
+        let mut offs = vec![decl.span.start, d.span.start];
+        if let Some(e) = extra {
+            offs.push(e);
+        }
+        if let Some(init) = &d.init {
+            collect_omitted_init(init, annots, out, &offs);
+        }
+    }
+}
+
+fn ident_span(pat: &BindingPattern<'_>) -> Option<u32> {
+    match pat {
+        BindingPattern::BindingIdentifier(id) => Some(id.span.start),
+        _ => None,
+    }
+}
+
 struct FileCtx<'a> {
     path: String,
     #[allow(dead_code)]
@@ -65,6 +333,7 @@ struct FileCtx<'a> {
     annots: HashMap<u32, Vec<AttachedOwn>>,
     sigs: HashMap<String, FnSig>,
     ns_prefix: Vec<String>,
+    payloads: Option<&'a dyn PayloadNames>,
 }
 
 impl FileCtx<'_> {
@@ -2908,8 +3177,30 @@ impl Checker<'_> {
         );
     }
 
+    fn resolve_payload(&mut self, ty: &OwnType, span: u32, label: &str) -> OwnType {
+        if !ty.payload_omitted() {
+            return ty.clone();
+        }
+        if let Some(payloads) = self.file.payloads {
+            if let Some(name) = payloads.name_at(span) {
+                if let Some(name) = own_payload_name(&name).or(Some(name)) {
+                    return ty.with_payload(name);
+                }
+            }
+        }
+        self.emit(
+            span,
+            RuleKind::MissingType,
+            format!(
+                "/*#own omitted a type for `{label}` and TypeScript did not supply one"
+            ),
+        );
+        ty.clone()
+    }
+
     fn add_from_type(&mut self, name: &str, ty: &OwnType, span: u32) {
-        let (kind, ty_name) = match ty {
+        let ty = self.resolve_payload(ty, span, name);
+        let (kind, ty_name) = match &ty {
             OwnType::Unique(s) => (OwnKind::Unique, s.clone()),
             OwnType::Affine(s) => (OwnKind::Affine, s.clone()),
             OwnType::Copy(_) => return,
@@ -2964,6 +3255,7 @@ impl Checker<'_> {
             });
             let let_ty = dirs.iter().find_map(|x| match x {
                 OwnDirective::Let { name, ty } => Some((name.clone(), ty.clone())),
+                OwnDirective::Kind(ty) => Some((name.clone().unwrap_or_default(), ty.clone())),
                 _ => None,
             });
 
@@ -3000,7 +3292,7 @@ impl Checker<'_> {
                 self.discard_sequence_prefix(init);
                 if let Some(n) = &name {
                     if let Some((let_name, ty)) = &let_ty {
-                        if let_name == n {
+                        if let_name == n || let_name.is_empty() {
                             self.add_from_type(n, ty, d.span.start);
                             continue;
                         }
@@ -3051,7 +3343,7 @@ impl Checker<'_> {
                 }
             } else if let Some(n) = &name {
                 if let Some((let_name, ty)) = &let_ty {
-                    if let_name == n {
+                    if let_name == n || let_name.is_empty() {
                         self.add_from_type(n, ty, d.span.start);
                     }
                 }
@@ -3169,7 +3461,7 @@ impl Checker<'_> {
         self.tbl.clear();
         self.scopes.clear();
         self.loop_depth = 0;
-        self.fn_ret = Some(sig.ret.clone());
+        self.fn_ret = Some(self.resolve_payload(&sig.ret, func.span.start, "return"));
         self.try_finally_depth = 0;
         self.pending_finally.clear();
         self.push_scope();
@@ -3221,7 +3513,7 @@ impl Checker<'_> {
         self.tbl.clear();
         self.scopes.clear();
         self.loop_depth = 0;
-        self.fn_ret = Some(sig.ret.clone());
+        self.fn_ret = Some(self.resolve_payload(&sig.ret, arrow.span.start, "return"));
         self.try_finally_depth = 0;
         self.pending_finally.clear();
         self.push_scope();

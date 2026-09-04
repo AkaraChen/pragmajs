@@ -1,10 +1,17 @@
 //! Combined check: one `pragma_parse` result, then own and rt on that program.
 
+mod bundle;
+
+use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use pragma_own::{CheckResult, Runtime};
+use pragma_own::{
+    check_parsed_with, check_parsed_with_payloads, omitted_payload_offsets, own_payload_name,
+    CheckResult, Runtime,
+};
 use pragma_parse::{parse, Allocator, Parsed};
 use pragma_rt::prelude::Environment;
 use pragma_rt::syntax::{Annotation, RtError};
@@ -12,15 +19,23 @@ use pragma_rt::type_provider::{CompilerTypeProviderError, CorsaTypeProvider};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompilerOptions {
-    pub corsa_path: String,
-    pub tsconfig_path: String,
+    pub corsa_path: Option<String>,
+    pub tsconfig_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompilerMode {
+    /// Discover Corsa and `tsconfig.json` from the source file. Skip if missing.
+    Auto,
+    Off,
+    On(CompilerOptions),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckOptions {
     pub runtime: Runtime,
     pub environment: Environment,
-    pub compiler: Option<CompilerOptions>,
+    pub compiler: CompilerMode,
 }
 
 impl Default for CheckOptions {
@@ -28,7 +43,7 @@ impl Default for CheckOptions {
         Self {
             runtime: Runtime::default(),
             environment: Environment::Auto,
-            compiler: None,
+            compiler: CompilerMode::Auto,
         }
     }
 }
@@ -121,38 +136,68 @@ pub fn check_parsed(
     parsed: &Parsed<'_>,
     options: &CheckOptions,
 ) -> Result<CombinedCheck, CombinedError> {
-    let own = pragma_own::check_parsed_with(filename, source, &parsed.program, options.runtime);
-
     let (rt_annotations, mut rt) =
         match pragma_rt::parser::annotations_from_program(source, filename, &parsed.program) {
             Ok(result) => (result.annotations, Vec::new()),
             Err(message) => (Vec::new(), vec![RtError { message, loc: None }]),
         };
 
+    let own;
     if rt.is_empty() {
-        rt = if let Some(compiler) = &options.compiler {
-            let resolved = resolve_compiler(filename, compiler)?;
+        if let Some(resolved) = compiler_for_file(filename, &options.compiler)? {
             let provider = CorsaTypeProvider::new(resolved.corsa_path, resolved.working_directory);
-            pragma_rt::checker::check_program_with_environment_and_compiler(
-                source,
-                filename,
-                &parsed.program,
-                &rt_annotations,
-                options.environment,
+            let mut extra: Vec<usize> = omitted_payload_offsets(filename, source, &parsed.program)
+                .into_iter()
+                .map(|offset| offset as usize)
+                .collect();
+            extra.extend(pragma_rt::parser::omitted_query_offsets(&rt_annotations));
+            extra.sort();
+            extra.dedup();
+            let hints = pragma_rt::compiler_hints::analyze_program_with_offsets(
                 &provider,
+                source,
+                &parsed.program,
                 &resolved.tsconfig_path,
                 &resolved.source_path,
+                &extra,
             )
-            .map_err(CombinedError::Compiler)?
-        } else {
-            pragma_rt::checker::check_program_with_environment(
+            .map_err(CombinedError::Compiler)?;
+            let mut payloads = HashMap::new();
+            for offset in omitted_payload_offsets(filename, source, &parsed.program) {
+                if let Some(rendered) = hints.rendered_at(offset as usize) {
+                    if let Some(name) = own_payload_name(rendered) {
+                        payloads.insert(offset, name);
+                    }
+                }
+            }
+            own = check_parsed_with_payloads(
+                filename,
+                source,
+                &parsed.program,
+                options.runtime,
+                Some(&payloads),
+            );
+            rt = pragma_rt::checker::check_program_with_hints(
                 source,
                 filename,
                 &parsed.program,
                 &rt_annotations,
                 options.environment,
-            )
-        };
+                &resolved.source_path,
+                &hints,
+            );
+        } else {
+            own = check_parsed_with(filename, source, &parsed.program, options.runtime);
+            rt = pragma_rt::checker::check_program_with_environment(
+                source,
+                filename,
+                &parsed.program,
+                &rt_annotations,
+                options.environment,
+            );
+        }
+    } else {
+        own = check_parsed_with(filename, source, &parsed.program, options.runtime);
     }
 
     Ok(CombinedCheck {
@@ -212,33 +257,147 @@ struct ResolvedCompiler {
     source_path: PathBuf,
 }
 
-fn canonicalize_path(path: &str, role: &str) -> Result<PathBuf, CombinedError> {
-    fs::canonicalize(path)
-        .map_err(|error| CombinedError::Path(format!("Failed to resolve {role} '{path}': {error}")))
+fn compiler_for_file(
+    filename: &str,
+    mode: &CompilerMode,
+) -> Result<Option<ResolvedCompiler>, CombinedError> {
+    match mode {
+        CompilerMode::Off => Ok(None),
+        CompilerMode::Auto => Ok(discover_compiler(filename, None, None, false)),
+        CompilerMode::On(options) => {
+            match discover_compiler(
+                filename,
+                options.corsa_path.as_deref(),
+                options.tsconfig_path.as_deref(),
+                true,
+            ) {
+                Some(resolved) => Ok(Some(resolved)),
+                None => {
+                    if options.corsa_path.is_none() && find_corsa_executable().is_none() {
+                        Err(CombinedError::Path(
+                            "Corsa executable not found; pass --corsa or set CORSA_BIN / TSGO"
+                                .into(),
+                        ))
+                    } else {
+                        Err(CombinedError::Path(
+                            "TypeScript config not found; pass --tsconfig".into(),
+                        ))
+                    }
+                }
+            }
+        }
+    }
 }
 
-fn resolve_compiler(
+fn discover_compiler(
     filename: &str,
-    compiler: &CompilerOptions,
-) -> Result<ResolvedCompiler, CombinedError> {
-    let source_path = canonicalize_path(filename, "source file")?;
-    let corsa_path = canonicalize_path(&compiler.corsa_path, "Corsa executable")?;
-    let tsconfig_path = canonicalize_path(&compiler.tsconfig_path, "TypeScript config")?;
-    let working_directory = tsconfig_path
-        .parent()
-        .ok_or_else(|| {
-            CombinedError::Path(format!(
-                "TypeScript config '{}' has no parent directory",
-                tsconfig_path.display()
-            ))
-        })?
-        .to_path_buf();
-    Ok(ResolvedCompiler {
+    corsa_override: Option<&str>,
+    tsconfig_override: Option<&str>,
+    required: bool,
+) -> Option<ResolvedCompiler> {
+    let source_path = fs::canonicalize(filename).ok()?;
+    let corsa_path = match corsa_override {
+        Some(path) => fs::canonicalize(path).ok(),
+        None => find_corsa_executable().or_else(|| bundle::bundled_tsgo().ok()),
+    }?;
+    let tsconfig_path = match tsconfig_override {
+        Some(path) => fs::canonicalize(path).ok(),
+        None => find_tsconfig(&source_path).or_else(|| {
+            if required || corsa_override.is_none() {
+                synthesize_tsconfig(&source_path)
+            } else {
+                None
+            }
+        }),
+    }?;
+    let working_directory = tsconfig_path.parent()?.to_path_buf();
+    Some(ResolvedCompiler {
         corsa_path,
         tsconfig_path,
         working_directory,
         source_path,
     })
+}
+
+fn find_corsa_executable() -> Option<PathBuf> {
+    for key in ["CORSA_BIN", "TSGO"] {
+        if let Ok(value) = env::var(key) {
+            if !value.is_empty() {
+                let path = PathBuf::from(value);
+                if path.is_file() {
+                    return fs::canonicalize(path).ok();
+                }
+            }
+        }
+    }
+    if let Some(path) = bundle::cached_tsgo() {
+        return Some(path);
+    }
+    for name in ["corsa", "tsgo"] {
+        if let Some(path) = which(name) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn which(name: &str) -> Option<PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    for dir in env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return fs::canonicalize(candidate).ok();
+        }
+    }
+    None
+}
+
+fn find_tsconfig(source: &Path) -> Option<PathBuf> {
+    let mut dir = if source.is_file() {
+        source.parent()?.to_path_buf()
+    } else if source.is_dir() {
+        source.to_path_buf()
+    } else {
+        return None;
+    };
+    loop {
+        let candidate = dir.join("tsconfig.json");
+        if candidate.is_file() {
+            return fs::canonicalize(candidate).ok();
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn synthesize_tsconfig(source: &Path) -> Option<PathBuf> {
+    let source = fs::canonicalize(source).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&source, &mut hasher);
+    let path = env::temp_dir().join(format!(
+        "pragmajs-tsconfig-{:x}.json",
+        std::hash::Hasher::finish(&hasher)
+    ));
+    let file = json_string(&source.to_string_lossy());
+    let body = format!(
+        "{{\n  \"compilerOptions\": {{\n    \"strict\": true,\n    \"strictNullChecks\": true,\n    \"checkJs\": true,\n    \"allowJs\": true,\n    \"noEmit\": true\n  }},\n  \"files\": [{file}]\n}}\n"
+    );
+    fs::write(&path, body).ok()?;
+    fs::canonicalize(path).ok()
+}
+
+fn json_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for character in value.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 const TARGET_VALUES: &str = "auto, ecmascript, browser, node, deno, bun";
@@ -261,7 +420,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             let (options, positional) = parse_options(rest)?;
             if positional.is_empty() {
                 return Err(format!(
-                    "Usage: pragmajs check [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable> --tsconfig <file>] <file-or-dir>..."
+                    "Usage: pragmajs check [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>..."
                 ));
             }
             Ok(Command::Check {
@@ -273,7 +432,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             let (options, positional) = parse_options(rest)?;
             if positional.len() != 2 {
                 return Err(format!(
-                    "Usage: pragmajs build [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable> --tsconfig <file>] <input> <output>"
+                    "Usage: pragmajs build [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>"
                 ));
             }
             Ok(Command::Build {
@@ -293,6 +452,7 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
     let mut runtime_seen = false;
     let mut corsa_path = None;
     let mut tsconfig_path = None;
+    let mut corsa_off = false;
     let mut positional = Vec::new();
     let mut index = 0;
 
@@ -345,6 +505,15 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
             continue;
         }
 
+        if argument == "--no-corsa" {
+            if corsa_off {
+                return Err("Corsa disabled more than once.".to_string());
+            }
+            corsa_off = true;
+            index += 1;
+            continue;
+        }
+
         if argument == "--corsa" || argument.starts_with("--corsa=") {
             if corsa_path.is_some() {
                 return Err("Corsa executable specified more than once.".to_string());
@@ -392,14 +561,19 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
         index += 1;
     }
 
-    let compiler = match (corsa_path, tsconfig_path) {
-        (Some(corsa_path), Some(tsconfig_path)) => Some(CompilerOptions {
+    if corsa_off && (corsa_path.is_some() || tsconfig_path.is_some()) {
+        return Err("'--no-corsa' cannot be combined with '--corsa' or '--tsconfig'.".to_string());
+    }
+
+    let compiler = if corsa_off {
+        CompilerMode::Off
+    } else if corsa_path.is_none() && tsconfig_path.is_none() {
+        CompilerMode::Auto
+    } else {
+        CompilerMode::On(CompilerOptions {
             corsa_path,
             tsconfig_path,
-        }),
-        (Some(_), None) => return Err("'--corsa' requires '--tsconfig'.".to_string()),
-        (None, Some(_)) => return Err("'--tsconfig' requires '--corsa'.".to_string()),
-        (None, None) => None,
+        })
     };
 
     Ok((
@@ -460,15 +634,16 @@ pub fn help_text() -> &'static str {
     "pragmajs — parse once, then run /*#own and /*#rt checks\n\n\
      Usage:\n\
          pragmajs check [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
-                 [--corsa <executable> --tsconfig <file>] <file-or-dir>...\n\
+                 [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>...\n\
          pragmajs build [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
-                 [--corsa <executable> --tsconfig <file>] <input> <output>\n\n\
+                 [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>\n\n\
      --runtime, -r   Ownership prelude: node (default), bun, deno, or none\n\
      --target        Refinement prelude: auto (default), ecmascript, browser, node, deno, bun\n\
-     --corsa         Corsa executable (requires --tsconfig)\n\
-     --tsconfig      TypeScript config (requires --corsa)\n\n\
-     check reports ownership and refinement diagnostics. build also writes JavaScript\n\
-     that preserves __rt.assert after both checks succeed."
+     --corsa         Corsa executable (default: bundled tsgo, else CORSA_BIN / PATH)\n\
+     --tsconfig      TypeScript config (default: nearest tsconfig.json, else a temp project)\n\
+     --no-corsa      Do not query TypeScript\n\n\
+     Corsa is on by default. check reports ownership and refinement diagnostics.\n\
+     build also writes JavaScript that preserves __rt.assert after both checks succeed."
 }
 
 #[cfg(test)]
@@ -518,7 +693,7 @@ mod tests {
                 options: CheckOptions {
                     runtime: Runtime::Bun,
                     environment: Environment::Node,
-                    compiler: None,
+                    compiler: CompilerMode::Auto,
                 },
             })
         );
@@ -536,14 +711,45 @@ mod tests {
                 options: CheckOptions {
                     runtime: Runtime::None,
                     environment: Environment::Bun,
-                    compiler: None,
+                    compiler: CompilerMode::Auto,
                 },
             })
         );
     }
 
     #[test]
-    fn compiler_options_must_be_supplied_as_a_pair() {
+    fn compiler_defaults_to_auto() {
+        assert_eq!(
+            parse_args(&args(&["check", "input.js"]))
+                .unwrap(),
+            Command::Check {
+                paths: vec![PathBuf::from("input.js")],
+                options: CheckOptions {
+                    runtime: Runtime::default(),
+                    environment: Environment::Auto,
+                    compiler: CompilerMode::Auto,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn no_corsa_disables_compiler() {
+        assert_eq!(
+            parse_args(&args(&["check", "--no-corsa", "input.js"])).unwrap(),
+            Command::Check {
+                paths: vec![PathBuf::from("input.js")],
+                options: CheckOptions {
+                    runtime: Runtime::default(),
+                    environment: Environment::Auto,
+                    compiler: CompilerMode::Off,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn compiler_flags_are_optional_overrides() {
         assert_eq!(
             parse_args(&args(&[
                 "check",
@@ -557,16 +763,26 @@ mod tests {
                 options: CheckOptions {
                     runtime: Runtime::default(),
                     environment: Environment::Auto,
-                    compiler: Some(CompilerOptions {
-                        corsa_path: "/tools/corsa".to_string(),
-                        tsconfig_path: "/project/tsconfig.json".to_string(),
+                    compiler: CompilerMode::On(CompilerOptions {
+                        corsa_path: Some("/tools/corsa".to_string()),
+                        tsconfig_path: Some("/project/tsconfig.json".to_string()),
                     }),
                 },
             })
         );
         assert_eq!(
             parse_args(&args(&["check", "--corsa", "/tools/corsa", "input.js"])),
-            Err("'--corsa' requires '--tsconfig'.".to_string())
+            Ok(Command::Check {
+                paths: vec![PathBuf::from("input.js")],
+                options: CheckOptions {
+                    runtime: Runtime::default(),
+                    environment: Environment::Auto,
+                    compiler: CompilerMode::On(CompilerOptions {
+                        corsa_path: Some("/tools/corsa".to_string()),
+                        tsconfig_path: None,
+                    }),
+                },
+            })
         );
         assert_eq!(
             parse_args(&args(&[
@@ -575,8 +791,25 @@ mod tests {
                 "/project/tsconfig.json",
                 "input.js",
             ])),
-            Err("'--tsconfig' requires '--corsa'.".to_string())
+            Ok(Command::Check {
+                paths: vec![PathBuf::from("input.js")],
+                options: CheckOptions {
+                    runtime: Runtime::default(),
+                    environment: Environment::Auto,
+                    compiler: CompilerMode::On(CompilerOptions {
+                        corsa_path: None,
+                        tsconfig_path: Some("/project/tsconfig.json".to_string()),
+                    }),
+                },
+            })
         );
+    }
+
+    #[test]
+    fn auto_compiler_skips_missing_source() {
+        assert!(compiler_for_file("no-such-file.js", &CompilerMode::Auto)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -587,6 +820,18 @@ mod tests {
                 "Unknown target 'workerd'. Expected one of: auto, ecmascript, browser, node, deno, bun."
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn finds_nearest_tsconfig_from_source() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../rt/fixtures/compiler/project/entry.js");
+        let found = find_tsconfig(&source).expect("tsconfig next to fixture");
+        assert!(
+            found.ends_with("compiler/project/tsconfig.json"),
+            "{}",
+            found.display()
         );
     }
 }

@@ -10,6 +10,9 @@ name = "pragmajs"
 path = "src/main.rs"
 
 [dependencies]
+flate2 = "1.1.2"
 pragma-own = { path = "../own" }
 pragma-parse = { path = "../parse" }
 pragma-rt = { path = "../rt" }
+tar = "0.4.44"
+ureq = { version = "2.12.1", default-features = false, features = ["tls"] }

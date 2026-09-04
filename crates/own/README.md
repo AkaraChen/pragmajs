@@ -56,6 +56,8 @@ examples/err-unique-forget.js:11:18: error[unique-forget]: unique value `buf` is
 | `&mut T` | 可变借用。同一表达式里不能重叠 `&mut`，也不能和 `&readonly` 混用。 |
 | `void` | 没有被拥有的返回值。 |
 
+`T` 可以省略：`/*#own (buf: unique) => void */` 或 `/*#own unique */` 贴在绑定上。`type:` 可写可不写。省略 payload 时必须能从 TypeScript（默认走 Corsa；`--no-corsa` 可关）拿到类型；否则报 `missing-type`，不会猜 `copy`。完整写法 `unique Buffer` 仍然有效。
+
 把 `unique` / `affine` 传给同种参数是 **move**。`void buf` 也是消费。`buf.field` 是 path 读取，不消费。
 
 被调函数参数写成 `&readonly T` / `&mut T` 时，这次调用只借用实参，不 move。

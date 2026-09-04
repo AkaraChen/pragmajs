@@ -24,6 +24,28 @@ impl OwnType {
             OwnType::Void => "void",
         }
     }
+
+    pub fn payload_omitted(&self) -> bool {
+        match self {
+            OwnType::Unique(s)
+            | OwnType::Affine(s)
+            | OwnType::Copy(s)
+            | OwnType::RefRead(s)
+            | OwnType::RefWrite(s) => s.is_empty(),
+            OwnType::Void => false,
+        }
+    }
+
+    pub fn with_payload(&self, name: String) -> Self {
+        match self {
+            OwnType::Unique(_) => OwnType::Unique(name),
+            OwnType::Affine(_) => OwnType::Affine(name),
+            OwnType::Copy(_) => OwnType::Copy(name),
+            OwnType::RefRead(_) => OwnType::RefRead(name),
+            OwnType::RefWrite(_) => OwnType::RefWrite(name),
+            OwnType::Void => OwnType::Void,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +73,8 @@ pub enum OwnDirective {
     Clone { owner: String, alias: String },
     Drop { name: String },
     Shorthand(BorrowMode),
+    /// `/*#own unique */` (and affine/copy) on the attached binding.
+    Kind(OwnType),
 }
 
 #[derive(Debug, Clone)]
@@ -243,6 +267,9 @@ fn parse_directives(src: &str) -> Result<Vec<OwnDirective>, String> {
                 let mode = parse_borrow_mode_after_amp(&mut lx)?;
                 dirs.push(OwnDirective::Shorthand(mode));
             }
+            Tok::LParen => {
+                dirs.push(OwnDirective::Type(parse_fn_sig_after_open(&mut lx)?));
+            }
             Tok::Ident(w) => match w.as_str() {
                 "type" => {
                     expect(&mut lx, Tok::Colon, ":")?;
@@ -266,6 +293,22 @@ fn parse_directives(src: &str) -> Result<Vec<OwnDirective>, String> {
                 "drop" => {
                     let name = expect_ident(&mut lx)?;
                     dirs.push(OwnDirective::Drop { name });
+                }
+                "unique" => {
+                    let name = optional_ident(&mut lx)?;
+                    dirs.push(OwnDirective::Kind(OwnType::Unique(
+                        name.unwrap_or_default(),
+                    )));
+                }
+                "affine" => {
+                    let name = optional_ident(&mut lx)?;
+                    dirs.push(OwnDirective::Kind(OwnType::Affine(
+                        name.unwrap_or_default(),
+                    )));
+                }
+                "copy" => {
+                    let name = optional_ident(&mut lx)?;
+                    dirs.push(OwnDirective::Kind(OwnType::Copy(name.unwrap_or_default())));
                 }
                 other => return Err(format!("unknown directive `{other}`")),
             },
@@ -320,6 +363,10 @@ pub fn parse_fn_sig_str(src: &str) -> Result<FnSig, String> {
 
 fn parse_fn_sig(lx: &mut Lexer<'_>) -> Result<FnSig, String> {
     expect(lx, Tok::LParen, "(")?;
+    parse_fn_sig_after_open(lx)
+}
+
+fn parse_fn_sig_after_open(lx: &mut Lexer<'_>) -> Result<FnSig, String> {
     let mut params = Vec::new();
     loop {
         match lx.next_tok()? {
@@ -347,16 +394,16 @@ fn parse_own_type(lx: &mut Lexer<'_>) -> Result<OwnType, String> {
     match lx.next_tok()? {
         Tok::Amp => {
             let mode = parse_borrow_mode_after_amp(lx)?;
-            let name = expect_ident(lx)?;
+            let name = optional_ident(lx)?.unwrap_or_default();
             Ok(match mode {
                 BorrowMode::Read => OwnType::RefRead(name),
                 BorrowMode::Write => OwnType::RefWrite(name),
             })
         }
         Tok::Ident(w) => match w.as_str() {
-            "unique" => Ok(OwnType::Unique(expect_ident(lx)?)),
-            "affine" => Ok(OwnType::Affine(expect_ident(lx)?)),
-            "copy" => Ok(OwnType::Copy(expect_ident(lx)?)),
+            "unique" => Ok(OwnType::Unique(optional_ident(lx)?.unwrap_or_default())),
+            "affine" => Ok(OwnType::Affine(optional_ident(lx)?.unwrap_or_default())),
+            "copy" => Ok(OwnType::Copy(optional_ident(lx)?.unwrap_or_default())),
             "void" | "Unit" | "unit" => Ok(OwnType::Void),
             other => {
                 // Bare type name defaults to unique (Austral Linear-ish).
@@ -390,6 +437,16 @@ fn expect_ident(lx: &mut Lexer<'_>) -> Result<String, String> {
     match lx.next_tok()? {
         Tok::Ident(s) => Ok(s),
         other => Err(format!("expected identifier, got {other:?}")),
+    }
+}
+
+fn optional_ident(lx: &mut Lexer<'_>) -> Result<Option<String>, String> {
+    match lx.peek_tok()? {
+        Tok::Ident(s) => {
+            let _ = lx.next_tok()?;
+            Ok(Some(s))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -447,6 +504,50 @@ mod tests {
                 assert_eq!(*mode, BorrowMode::Read);
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn parse_function_type_without_type_keyword() {
+        let mut diags = Vec::new();
+        let a = parse_own_comment("t.js", 0, "#own (buf: unique Buffer) => void", &mut diags)
+            .unwrap();
+        assert!(diags.is_empty());
+        match &a.directives[0] {
+            OwnDirective::Type(sig) => {
+                assert_eq!(sig.params[0].0, "buf");
+                assert!(matches!(sig.params[0].1, OwnType::Unique(_)));
+                assert_eq!(sig.ret, OwnType::Void);
+            }
+            _ => panic!("expected type"),
+        }
+    }
+
+    #[test]
+    fn parse_omitted_payload_names() {
+        let mut d = Vec::new();
+        let a = parse_own_comment("t.ts", 0, "#own type: (buf: unique) => void", &mut d).unwrap();
+        assert!(d.is_empty());
+        match &a.directives[0] {
+            OwnDirective::Type(sig) => {
+                assert!(sig.params[0].1.payload_omitted());
+                assert!(matches!(sig.params[0].1, OwnType::Unique(_)));
+                assert_eq!(sig.ret, OwnType::Void);
+            }
+            _ => panic!("expected type"),
+        }
+        let a = parse_own_comment("t.ts", 0, "#own unique", &mut d).unwrap();
+        assert!(matches!(
+            &a.directives[0],
+            OwnDirective::Kind(OwnType::Unique(s)) if s.is_empty()
+        ));
+        let a = parse_own_comment("t.ts", 0, "#own let buf: unique", &mut d).unwrap();
+        match &a.directives[0] {
+            OwnDirective::Let { name, ty } => {
+                assert_eq!(name, "buf");
+                assert!(ty.payload_omitted());
+            }
+            _ => panic!("expected let"),
         }
     }
 }

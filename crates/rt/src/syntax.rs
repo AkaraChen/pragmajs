@@ -14,6 +14,8 @@ pub enum BaseType {
     Object(Vec<(String, BaseType)>),
     Function(Vec<RefinedParam>, Box<RefinementType>),
     Named(String),
+    /// `/*#rt type: | pred */` — fill from TypeScript when present.
+    Omitted,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +129,8 @@ pub struct Annotation {
     pub ty: RefinementType,
     pub predicate_params: Vec<String>,
     pub loc: SourceLocation,
+    /// Binding/param/function offset used to query a compiler type.
+    pub query_offset: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -36,7 +36,10 @@ Parameter and return types:
 | `&mut T` | Mutable borrow (Austral `&![T, R]`). |
 | `void` / `Unit` | No owned return. |
 
-A bare type name `T` is treated as `unique T`.
+A bare type name `T` is treated as `unique T`. The payload name may be omitted
+(`unique`, `(buf: unique) => void`) when TypeScript supplies it. Corsa is on
+by default on the native CLI. `type:` is optional. Without a compiler type,
+omitted payloads are `missing-type`, not a guessed `copy`.
 
 ### Locals, statement borrows, clone, drop
 

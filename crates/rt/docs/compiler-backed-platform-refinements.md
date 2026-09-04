@@ -88,9 +88,11 @@ directly; it does not inject prelude signatures into user annotations.
 
 ### Corsa integration
 
-The CLI accepts `--corsa` and `--tsconfig` in either `--flag value` or
-`--flag=value` form. They are a pair: supplying only one is an error, as are
-duplicate options.
+The CLI turns Corsa on by default. It looks up `CORSA_BIN` / `TSGO`, then
+`corsa` or `tsgo` on `PATH`, and the nearest `tsconfig.json` (or a temporary
+project that contains the checked file). `--corsa` and `--tsconfig` override
+discovery in either `--flag value` or `--flag=value` form; `--no-corsa` skips
+TypeScript. Duplicate options are an error.
 
 The Corsa adapter is behind `CompilerTypeProvider`, keeping compiler transport
 and project queries outside the verifier. The implementation:

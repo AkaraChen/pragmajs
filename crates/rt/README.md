@@ -23,6 +23,22 @@ function sqrt(n) {
 const x = 9;
 ```
 
+When TypeScript already has the base type, it may be omitted. `type:` is optional:
+
+```js
+/*#rt (n: | n > 0) => | $ > 0 */
+function sqrt(n: number) {
+  return Math.sqrt(n);
+}
+
+/*#rt | x > 0 */
+const x: number = 9;
+```
+
+Without Corsa (`--no-corsa`, or no executable / type at that binding), an
+omitted base is an error; it is not guessed as `number` or `unknown`. Fully
+written `number | pred` remains valid. Corsa is on by default.
+
 `$` refers to the return value.
 
 Predicate expressions support safe-integer literals, `+`, `-`, `*`, ordered

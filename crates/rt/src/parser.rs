@@ -398,8 +398,7 @@ impl TypeParser {
     }
 
     fn parse_annotation(&mut self) -> Result<RefinementType, String> {
-        self.expect_ident("type")?;
-        self.expect(TokenKind::Colon)?;
+        self.eat_optional_type_keyword();
         if self.peek().kind == TokenKind::Ident && self.peek().value == "forall" {
             self.pos += 1;
             loop {
@@ -422,7 +421,11 @@ impl TypeParser {
     }
 
     fn parse_refined_type(&mut self) -> Result<RefinementType, String> {
-        let base = self.parse_base_type()?;
+        let base = if self.omitted_base_start() {
+            BaseType::Omitted
+        } else {
+            self.parse_base_type()?
+        };
         let index = if self.peek().kind == TokenKind::LBracket {
             self.pos += 1;
             let index = self.parse_predicate()?;
@@ -437,11 +440,40 @@ impl TypeParser {
         } else {
             None
         };
+        if matches!(base, BaseType::Omitted) && index.is_none() && predicate.is_none() {
+            return Err("Expected type, index, or predicate".into());
+        }
         Ok(RefinementType {
             base,
             index,
             predicate,
         })
+    }
+
+    fn eat_optional_type_keyword(&mut self) {
+        if self.peek().kind == TokenKind::Ident
+            && self.peek().value == "type"
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|token| token.kind == TokenKind::Colon)
+        {
+            let _ = self.expect_ident("type");
+            let _ = self.expect(TokenKind::Colon);
+        }
+    }
+
+    fn omitted_base_start(&self) -> bool {
+        matches!(
+            self.peek().kind,
+            TokenKind::Pipe
+                | TokenKind::LBracket
+                | TokenKind::Eof
+                | TokenKind::RParen
+                | TokenKind::Comma
+                | TokenKind::Arrow
+                | TokenKind::RBrace
+        )
     }
 
     fn parse_base_type(&mut self) -> Result<BaseType, String> {
@@ -852,6 +884,12 @@ pub fn annotations_from_program(
                 } => {
                     if let BaseType::Function(params, ret) = &ty.base {
                         for (idx, p) in params.iter().enumerate() {
+                            let query_offset = param_query_offset(
+                                &collector.spans,
+                                *function_start,
+                                idx,
+                            )
+                            .unwrap_or(*function_start);
                             annotations.push(Annotation {
                                 target: AnnotationTarget::Param {
                                     function_name: function_name.clone(),
@@ -862,6 +900,7 @@ pub fn annotations_from_program(
                                 ty: p.ty.clone(),
                                 predicate_params: predicate_params.clone(),
                                 loc: loc.clone(),
+                                query_offset,
                             });
                         }
                         annotations.push(Annotation {
@@ -872,6 +911,7 @@ pub fn annotations_from_program(
                             ty: *ret.clone(),
                             predicate_params: predicate_params.clone(),
                             loc,
+                            query_offset: *function_start,
                         });
                     } else {
                         annotations.push(Annotation {
@@ -882,6 +922,7 @@ pub fn annotations_from_program(
                             ty,
                             predicate_params: predicate_params.clone(),
                             loc,
+                            query_offset: *function_start,
                         });
                     }
                 }
@@ -901,6 +942,7 @@ pub fn annotations_from_program(
                         ty,
                         predicate_params,
                         loc,
+                        query_offset: info.span.start,
                     });
                 }
                 NodeTarget::Variable {
@@ -915,6 +957,7 @@ pub fn annotations_from_program(
                         ty,
                         predicate_params,
                         loc,
+                        query_offset: *declaration_start,
                     });
                 }
             }
@@ -922,6 +965,39 @@ pub fn annotations_from_program(
     }
 
     Ok(ParseResult { annotations })
+}
+
+fn param_query_offset(spans: &[SpanInfo], function_start: u32, index: usize) -> Option<u32> {
+    spans.iter().find_map(|info| match &info.target {
+        Some(NodeTarget::Param {
+            function_start: start,
+            index: i,
+            ..
+        }) if *start == function_start && *i == index => Some(info.span.start),
+        _ => None,
+    })
+}
+
+fn refinement_omits_base(ty: &RefinementType) -> bool {
+    if matches!(ty.base, BaseType::Omitted) {
+        return true;
+    }
+    if let BaseType::Function(params, ret) = &ty.base {
+        return params.iter().any(|p| refinement_omits_base(&p.ty)) || refinement_omits_base(ret);
+    }
+    false
+}
+
+/// Offsets that need a compiler type because a base type was omitted.
+pub fn omitted_query_offsets(annotations: &[Annotation]) -> Vec<usize> {
+    let mut offsets: Vec<usize> = annotations
+        .iter()
+        .filter(|a| refinement_omits_base(&a.ty))
+        .map(|a| a.query_offset as usize)
+        .collect();
+    offsets.sort();
+    offsets.dedup();
+    offsets
 }
 
 #[derive(Debug, Clone)]

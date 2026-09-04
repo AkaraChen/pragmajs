@@ -40,6 +40,7 @@ pub struct CompilerHint {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CompilerHints {
     hints: BTreeMap<(u32, u32), CompilerHint>,
+    rendered_by_offset: BTreeMap<usize, String>,
     diagnostics: Vec<CompilerDiagnostic>,
 }
 
@@ -47,6 +48,11 @@ impl CompilerHints {
     /// Return compiler evidence for one exact expression span.
     pub fn get(&self, span: Span) -> Option<&CompilerHint> {
         self.hints.get(&(span.start, span.end))
+    }
+
+    /// Compiler-rendered type at a queried UTF-8 byte offset.
+    pub fn rendered_at(&self, byte_offset: usize) -> Option<&str> {
+        self.rendered_by_offset.get(&byte_offset).map(String::as_str)
     }
 
     /// Return all diagnostics produced during the same compiler analysis.
@@ -82,12 +88,24 @@ pub fn analyze_program(
     config_path: &Path,
     file_path: &Path,
 ) -> Result<CompilerHints, CompilerTypeProviderError> {
+    analyze_program_with_offsets(provider, source, program, config_path, file_path, &[])
+}
+
+/// Like [`analyze_program`], also querying `extra_offsets` (omitted pragma bases).
+pub fn analyze_program_with_offsets(
+    provider: &dyn CompilerTypeProvider,
+    source: &str,
+    program: &Program<'_>,
+    config_path: &Path,
+    file_path: &Path,
+    extra_offsets: &[usize],
+) -> Result<CompilerHints, CompilerTypeProviderError> {
     finish_analysis(
         provider,
         source,
         config_path,
         file_path,
-        CompilerQueryPlan::from_program(program),
+        CompilerQueryPlan::from_program_with_extra(program, extra_offsets),
     )
 }
 
@@ -149,8 +167,19 @@ fn finish_analysis(
         })
         .collect();
 
+    let rendered_by_offset = types_by_offset
+        .iter()
+        .filter_map(|(offset, compiler_type)| {
+            compiler_type
+                .rendered_type
+                .clone()
+                .map(|rendered| (*offset, rendered))
+        })
+        .collect();
+
     Ok(CompilerHints {
         hints,
+        rendered_by_offset,
         diagnostics: analysis.diagnostics,
     })
 }
@@ -191,6 +220,17 @@ impl CompilerQueryPlan {
         let name = file_path.to_str().unwrap_or("file.js");
         let parsed = parse(&allocator, name, source);
         Self::from_program(&parsed.program)
+    }
+
+    fn from_program_with_extra(program: &Program<'_>, extra_offsets: &[usize]) -> Self {
+        let mut plan = Self::from_program(program);
+        let mut seen: BTreeSet<usize> = plan.byte_offsets.iter().copied().collect();
+        for &offset in extra_offsets {
+            if seen.insert(offset) {
+                plan.byte_offsets.push(offset);
+            }
+        }
+        plan
     }
 
     fn from_program(program: &Program<'_>) -> Self {
@@ -360,6 +400,52 @@ fn callable_offset(expression: &Expression<'_>) -> Option<u32> {
 pub fn parse_typescript_type(rendered: &str) -> BaseType {
     let rendered = rendered.trim();
     parse_type(rendered).unwrap_or_else(|| BaseType::Named(rendered.to_owned()))
+}
+
+/// Split a compiler-rendered call signature `(n: number) => number` into
+/// parameter type strings and the return type string.
+pub fn call_signature_parts(rendered: &str) -> Option<(Vec<String>, String)> {
+    let rendered = rendered.trim();
+    let rendered = strip_outer_parentheses(rendered)?;
+    let arrow = top_level_arrow_index(rendered)?;
+    let params_src = rendered[..arrow].trim();
+    let ret = rendered[arrow + 2..].trim();
+    if ret.is_empty() {
+        return None;
+    }
+    let params_inner = params_src
+        .strip_prefix('(')?
+        .strip_suffix(')')?
+        .trim();
+    let params = if params_inner.is_empty() {
+        Vec::new()
+    } else {
+        split_top_level(params_inner, ',')?
+            .into_iter()
+            .map(|parameter| {
+                parameter
+                    .split_once(':')
+                    .map(|(_, ty)| ty.trim().to_string())
+                    .unwrap_or_else(|| parameter.trim().to_string())
+            })
+            .collect()
+    };
+    Some((params, ret.to_string()))
+}
+
+fn top_level_arrow_index(rendered: &str) -> Option<usize> {
+    let mut state = ScanState::default();
+    let mut characters = rendered.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        if state.is_top_level()
+            && character == '='
+            && characters.peek().is_some_and(|(_, next)| *next == '>')
+        {
+            return Some(index);
+        }
+        state.advance(character)?;
+    }
+    None
 }
 
 fn parse_type(rendered: &str) -> Option<BaseType> {
@@ -674,7 +760,7 @@ impl ScanState {
 
 #[cfg(test)]
 mod tests {
-    use super::{CompilerQueryPlan, analyze_source, parse_typescript_type};
+    use super::{CompilerQueryPlan, analyze_source, call_signature_parts, parse_typescript_type};
     use crate::syntax::BaseType;
     use crate::type_provider::{
         CompilerDiagnostic, CompilerDiagnosticKind, CompilerDiagnosticSeverity, CompilerRange,
@@ -1046,6 +1132,14 @@ mod tests {
         assert_eq!(
             parse_typescript_type("(value: string) => number | null"),
             BaseType::Named("(value: string) => number | null".into())
+        );
+        assert_eq!(
+            call_signature_parts("(n: number) => number"),
+            Some((vec!["number".into()], "number".into()))
+        );
+        assert_eq!(
+            call_signature_parts("(value: string) => number | null"),
+            Some((vec!["string".into()], "number | null".into()))
         );
         assert_eq!(
             parse_typescript_type("Array<string"),
