@@ -3692,7 +3692,11 @@ impl Checker<'_> {
         }
         if let Some(body) = &func.body {
             self.scan_unmapped_body(body);
-            self.report_captures_in_body(body);
+            let owned = capture_candidates_for_function(
+                self.tbl.keys().cloned().collect(),
+                func,
+            );
+            self.report_captures_in_body(body, &owned);
             let saved_tbl = self.tbl.clone();
             let saved_scopes = self.scopes.clone();
             let saved_depth = self.loop_depth;
@@ -3722,7 +3726,11 @@ impl Checker<'_> {
 
     fn check_function_with_sig(&mut self, func: &Function<'_>, sig: &FnSig) {
         if let Some(body) = &func.body {
-            self.report_captures_in_body(body);
+            let owned = capture_candidates_for_function(
+                self.tbl.keys().cloned().collect(),
+                func,
+            );
+            self.report_captures_in_body(body, &owned);
         }
         let saved_tbl = self.tbl.clone();
         let saved_scopes = self.scopes.clone();
@@ -4824,7 +4832,8 @@ impl Checker<'_> {
             Expression::FunctionExpression(f) => {
                 self.check_param_default_captures(f);
                 if let Some(body) = &f.body {
-                    self.report_captures_in_body(body);
+                    let owned = capture_candidates_for_function(owned, f);
+                    self.report_captures_in_body(body, &owned);
                 }
             }
             Expression::ArrowFunctionExpression(a) => {
@@ -4916,12 +4925,17 @@ impl Checker<'_> {
         }
     }
 
-    fn report_captures_in_body(&mut self, body: &FunctionBody<'_>) {
-        let owned: Vec<String> = self.tbl.keys().cloned().collect();
+    fn report_captures_in_body(&mut self, body: &FunctionBody<'_>, owned: &[String]) {
+        let owned = capture_candidates_after_hoisted_vars(owned, &body.statements);
+        self.report_captures_statements(&body.statements, &owned);
+    }
+
+    fn report_captures_statements(&mut self, statements: &[Statement<'_>], owned: &[String]) {
+        let owned = capture_candidates_after_local_declarations(owned, statements);
         if owned.is_empty() {
             return;
         }
-        for stmt in &body.statements {
+        for stmt in statements {
             self.report_captures_stmt(stmt, &owned);
         }
     }
@@ -4936,9 +4950,7 @@ impl Checker<'_> {
             }
             Statement::ThrowStatement(t) => self.report_captures_expr(&t.argument, owned),
             Statement::BlockStatement(b) => {
-                for s in &b.body {
-                    self.report_captures_stmt(s, owned);
-                }
+                self.report_captures_statements(&b.body, owned);
             }
             Statement::IfStatement(i) => {
                 self.report_captures_expr(&i.test, owned);
@@ -4956,18 +4968,18 @@ impl Checker<'_> {
                 self.report_captures_expr(&w.test, owned);
             }
             Statement::TryStatement(t) => {
-                for s in &t.block.body {
-                    self.report_captures_stmt(s, owned);
-                }
+                self.report_captures_statements(&t.block.body, owned);
                 if let Some(h) = &t.handler {
-                    for s in &h.body.body {
-                        self.report_captures_stmt(s, owned);
+                    let mut catch_owned = owned.to_vec();
+                    if let Some(param) = &h.param {
+                        let mut bound = HashSet::new();
+                        collect_binding_names(&param.pattern, &mut bound);
+                        catch_owned.retain(|name| !bound.contains(name));
                     }
+                    self.report_captures_statements(&h.body.body, &catch_owned);
                 }
                 if let Some(f) = &t.finalizer {
-                    for s in &f.body {
-                        self.report_captures_stmt(s, owned);
-                    }
+                    self.report_captures_statements(&f.body, owned);
                 }
             }
             Statement::VariableDeclaration(v) => {
@@ -5019,15 +5031,14 @@ impl Checker<'_> {
                 }
             }
             Statement::FunctionDeclaration(f) => {
+                let nested_owned = capture_candidates_for_function(owned.to_vec(), f);
                 for p in &f.params.items {
                     if let Some(init) = &p.initializer {
-                        self.report_captures_expr(init, owned);
+                        self.report_captures_expr(init, &nested_owned);
                     }
                 }
                 if let Some(body) = &f.body {
-                    for st in &body.statements {
-                        self.report_captures_stmt(st, owned);
-                    }
+                    self.report_captures_in_body(body, &nested_owned);
                 }
             }
             Statement::LabeledStatement(l) => self.report_captures_stmt(&l.body, owned),
@@ -5174,32 +5185,30 @@ impl Checker<'_> {
             }
             Expression::AssignmentExpression(a) => self.report_captures_expr(&a.right, owned),
             Expression::FunctionExpression(f) => {
+                let nested_owned = capture_candidates_for_function(owned.to_vec(), f);
                 for p in &f.params.items {
                     if let Some(init) = &p.initializer {
-                        self.report_captures_expr(init, owned);
+                        self.report_captures_expr(init, &nested_owned);
                     }
                 }
                 if let Some(body) = &f.body {
-                    for s in &body.statements {
-                        self.report_captures_stmt(s, owned);
-                    }
+                    self.report_captures_in_body(body, &nested_owned);
                 }
             }
             Expression::ArrowFunctionExpression(a) => {
+                let nested_owned = capture_candidates_for_params(owned.to_vec(), &a.params, None);
                 for p in &a.params.items {
                     if let Some(init) = &p.initializer {
-                        self.report_captures_expr(init, owned);
+                        self.report_captures_expr(init, &nested_owned);
                     }
                 }
                 match &a.body {
                     ArrowFunctionBody::FunctionBody(body) => {
-                        for s in &body.statements {
-                            self.report_captures_stmt(s, owned);
-                        }
+                        self.report_captures_in_body(body, &nested_owned);
                     }
                     other => {
                         if let Some(e) = other.as_expression() {
-                            self.report_captures_expr(e, owned);
+                            self.report_captures_expr(e, &nested_owned);
                         }
                     }
                 }
@@ -6573,7 +6582,11 @@ impl Checker<'_> {
     }
 
     fn report_captures_arrow(&mut self, arrow: &ArrowFunctionExpression<'_>) {
-        let owned: Vec<String> = self.tbl.keys().cloned().collect();
+        let owned = capture_candidates_for_params(
+            self.tbl.keys().cloned().collect(),
+            &arrow.params,
+            None,
+        );
         if owned.is_empty() {
             return;
         }
@@ -6583,7 +6596,7 @@ impl Checker<'_> {
             }
         }
         match &arrow.body {
-            ArrowFunctionBody::FunctionBody(body) => self.report_captures_in_body(body),
+            ArrowFunctionBody::FunctionBody(body) => self.report_captures_in_body(body, &owned),
             other => {
                 if let Some(e) = other.as_expression() {
                     self.report_captures_expr(e, &owned);
@@ -6593,7 +6606,7 @@ impl Checker<'_> {
     }
 
     fn check_param_default_captures(&mut self, func: &Function<'_>) {
-        let owned: Vec<String> = self.tbl.keys().cloned().collect();
+        let owned = capture_candidates_for_function(self.tbl.keys().cloned().collect(), func);
         if owned.is_empty() {
             return;
         }
@@ -7135,6 +7148,186 @@ enum ArgMode {
     Read,
     Write,
     Path,
+}
+
+fn capture_candidates_for_function(owned: Vec<String>, function: &Function<'_>) -> Vec<String> {
+    capture_candidates_for_params(
+        owned,
+        &function.params,
+        function.id.as_ref().map(|id| id.name.as_str()),
+    )
+}
+
+fn capture_candidates_for_params(
+    mut owned: Vec<String>,
+    params: &oxc::ast::ast::FormalParameters<'_>,
+    local_name: Option<&str>,
+) -> Vec<String> {
+    let mut bound = HashSet::new();
+    if let Some(name) = local_name {
+        bound.insert(name.to_string());
+    }
+    for param in &params.items {
+        collect_binding_names(&param.pattern, &mut bound);
+    }
+    if let Some(rest) = &params.rest {
+        collect_binding_names(&rest.rest.argument, &mut bound);
+    }
+    owned.retain(|name| !bound.contains(name));
+    owned
+}
+
+fn capture_candidates_after_local_declarations(
+    owned: &[String],
+    statements: &[Statement<'_>],
+) -> Vec<String> {
+    let mut bound = HashSet::new();
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    collect_binding_names(&declarator.id, &mut bound);
+                }
+            }
+            Statement::FunctionDeclaration(function) => {
+                if let Some(id) = &function.id {
+                    bound.insert(id.name.as_str().to_string());
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(id) = &class.id {
+                    bound.insert(id.name.as_str().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    owned
+        .iter()
+        .filter(|name| !bound.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn capture_candidates_after_hoisted_vars(
+    owned: &[String],
+    statements: &[Statement<'_>],
+) -> Vec<String> {
+    let mut bound = HashSet::new();
+    collect_hoisted_var_names(statements, &mut bound);
+    owned
+        .iter()
+        .filter(|name| !bound.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn collect_hoisted_var_names(statements: &[Statement<'_>], out: &mut HashSet<String>) {
+    for statement in statements {
+        match statement {
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Var =>
+            {
+                for declarator in &declaration.declarations {
+                    collect_binding_names(&declarator.id, out);
+                }
+            }
+            Statement::BlockStatement(block) => collect_hoisted_var_names(&block.body, out),
+            Statement::IfStatement(statement) => {
+                collect_hoisted_var_names(std::slice::from_ref(&statement.consequent), out);
+                if let Some(alternate) = &statement.alternate {
+                    collect_hoisted_var_names(std::slice::from_ref(alternate), out);
+                }
+            }
+            Statement::WhileStatement(statement) => {
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            Statement::DoWhileStatement(statement) => {
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            Statement::ForStatement(statement) => {
+                if let Some(ForStatementInit::VariableDeclaration(declaration)) = &statement.init {
+                    if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Var {
+                        for declarator in &declaration.declarations {
+                            collect_binding_names(&declarator.id, out);
+                        }
+                    }
+                }
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            Statement::ForInStatement(statement) => {
+                collect_hoisted_for_left(&statement.left, out);
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            Statement::ForOfStatement(statement) => {
+                collect_hoisted_for_left(&statement.left, out);
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            Statement::SwitchStatement(statement) => {
+                for case in &statement.cases {
+                    collect_hoisted_var_names(&case.consequent, out);
+                }
+            }
+            Statement::TryStatement(statement) => {
+                collect_hoisted_var_names(&statement.block.body, out);
+                if let Some(handler) = &statement.handler {
+                    collect_hoisted_var_names(&handler.body.body, out);
+                }
+                if let Some(finalizer) = &statement.finalizer {
+                    collect_hoisted_var_names(&finalizer.body, out);
+                }
+            }
+            Statement::LabeledStatement(statement) => {
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            Statement::WithStatement(statement) => {
+                collect_hoisted_var_names(std::slice::from_ref(&statement.body), out);
+            }
+            // Nested functions and classes own their `var` declarations.
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => {}
+            _ => {}
+        }
+    }
+}
+
+fn collect_hoisted_for_left(
+    left: &oxc::ast::ast::ForStatementLeft<'_>,
+    out: &mut HashSet<String>,
+) {
+    if let oxc::ast::ast::ForStatementLeft::VariableDeclaration(declaration) = left {
+        if declaration.kind == oxc::ast::ast::VariableDeclarationKind::Var {
+            for declarator in &declaration.declarations {
+                collect_binding_names(&declarator.id, out);
+            }
+        }
+    }
+}
+
+fn collect_binding_names(pattern: &BindingPattern<'_>, out: &mut HashSet<String>) {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => {
+            out.insert(identifier.name.as_str().to_string());
+        }
+        BindingPattern::AssignmentPattern(assignment) => {
+            collect_binding_names(&assignment.left, out);
+        }
+        BindingPattern::ObjectPattern(object) => {
+            for property in &object.properties {
+                collect_binding_names(&property.value, out);
+            }
+            if let Some(rest) = &object.rest {
+                collect_binding_names(&rest.argument, out);
+            }
+        }
+        BindingPattern::ArrayPattern(array) => {
+            for element in array.elements.iter().flatten() {
+                collect_binding_names(element, out);
+            }
+            if let Some(rest) = &array.rest {
+                collect_binding_names(&rest.argument, out);
+            }
+        }
+    }
 }
 
 fn param_mode(ty: Option<&OwnType>) -> ArgMode {

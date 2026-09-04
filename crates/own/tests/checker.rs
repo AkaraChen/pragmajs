@@ -1273,6 +1273,125 @@ fn try_return_finally_consume_is_cleanup() {
 }
 
 #[test]
+fn arrow_parameter_shadow_is_not_an_owned_capture() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function outer(resource) {
+  const identity = (resource) => resource;
+  identity({});
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "an arrow parameter shadows the outer owned name: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn function_parameter_shadow_is_not_an_owned_capture() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function outer(resource) {
+  function identity(resource) { return resource; }
+  identity({});
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "a function parameter shadows the outer owned name: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn nested_local_declaration_shadow_is_not_an_owned_capture() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function outer(resource) {
+  const makeLocal = () => {
+    const resource = {};
+    return resource;
+  };
+  makeLocal();
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "a nested local declaration shadows the outer owned name: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn nested_block_var_is_function_scoped_for_capture_detection() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function outer(resource) {
+  const makeLocal = () => {
+    if (true) { var resource = {}; }
+    return resource;
+  };
+  makeLocal();
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "a nested-block var shadows throughout its function: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn catch_parameter_shadow_is_not_an_owned_capture() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function outer(resource) {
+  const recover = () => {
+    try { throw {}; }
+    catch (resource) { return resource; }
+  };
+  recover();
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "a catch parameter shadows only inside its catch body: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn block_local_shadow_does_not_hide_a_later_outer_capture() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function outer(resource) {
+  const capture = () => {
+    { const resource = {}; void resource; }
+    return resource;
+  };
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.kinds().contains(&RuleKind::UnmappedConstruct),
+        "a block-scoped shadow must not hide an outer capture after the block: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
 fn optional_call_and_logical_unique_return() {
     let src_opt = r#"
 /*#own type: () => void */
