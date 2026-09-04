@@ -10,6 +10,101 @@ fn kinds(src: &str) -> Vec<RuleKind> {
     check_source("test.js", src).kinds()
 }
 
+#[test]
+fn nested_callee_contract_does_not_pollute_outer_scope() {
+    let src = r#"
+/*#own type: (value: copy Resource) => void */
+function touch(value) {}
+
+function unrelated() {
+  /*#own type: (value: unique Resource) => void */
+  function touch(value) { void value; }
+  touch({});
+}
+
+/*#own type: (resource: unique Resource) => void */
+function inspect(resource) {
+  touch(resource);
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "a nested contract must not replace its outer namesake: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn nested_scope_uses_its_own_callee_contract() {
+    let src = r#"
+/*#own type: (value: copy Resource) => void */
+function touch(value) {}
+
+/*#own type: (resource: unique Resource) => void */
+function inner(resource) {
+  /*#own type: (value: unique Resource) => void */
+  function touch(value) { void value; }
+  touch(resource);
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.kinds().contains(&RuleKind::UseAfterMove),
+        "the inner unique contract must consume its argument: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn function_declaration_contract_is_hoisted_within_its_scope() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function inner(resource) {
+  touch(resource);
+  void resource;
+
+  /*#own type: (value: unique Resource) => void */
+  function touch(value) { void value; }
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.kinds().contains(&RuleKind::UseAfterMove),
+        "a declaration-before-call ordering must not be required: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn sibling_function_callee_scopes_do_not_interfere() {
+    let src = r#"
+/*#own type: (value: copy Resource) => void */
+function touch(value) {}
+
+/*#own type: (resource: unique Resource) => void */
+function left(resource) {
+  /*#own type: (value: unique Resource) => void */
+  function touch(value) { void value; }
+  touch(resource);
+}
+
+/*#own type: (resource: unique Resource) => void */
+function right(resource) {
+  touch(resource);
+  void resource;
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "sibling functions must resolve independent lexical contracts: {:?}",
+        result.formatted_lines()
+    );
+}
+
 fn has(src: &str, kind: RuleKind) -> bool {
     kinds(src).contains(&kind)
 }

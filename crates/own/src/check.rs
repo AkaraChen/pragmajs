@@ -127,6 +127,8 @@ pub fn check_program_with_payloads_and_features(
         source,
         annots,
         sigs: prelude_sigs.clone(),
+        scoped_sigs: HashMap::new(),
+        collect_fn_scopes: vec![FileCtx::ROOT_SIG_SCOPE],
         prelude_sigs,
         ns_prefix: Vec::new(),
         payloads,
@@ -144,6 +146,7 @@ pub fn check_program_with_payloads_and_features(
         try_finally_depth: 0,
         pending_finally: Vec::new(),
         checked_bodies: HashSet::new(),
+        callee_scopes: Vec::new(),
         features,
     };
     checker.check_program(program);
@@ -367,6 +370,8 @@ struct FileCtx<'a> {
     source: &'a str,
     annots: HashMap<u32, Vec<AttachedOwn>>,
     sigs: HashMap<String, FnSig>,
+    scoped_sigs: HashMap<u32, HashMap<String, FnSig>>,
+    collect_fn_scopes: Vec<u32>,
     prelude_sigs: HashMap<String, FnSig>,
     ns_prefix: Vec<String>,
     payloads: Option<&'a dyn PayloadNames>,
@@ -374,6 +379,21 @@ struct FileCtx<'a> {
 }
 
 impl FileCtx<'_> {
+    const ROOT_SIG_SCOPE: u32 = u32::MAX;
+
+    fn insert_sig(&mut self, name: String, sig: FnSig) {
+        if name.contains('.') || name.contains('#') {
+            self.sigs.insert(name, sig);
+            return;
+        }
+        let scope = self
+            .collect_fn_scopes
+            .last()
+            .copied()
+            .unwrap_or(Self::ROOT_SIG_SCOPE);
+        self.scoped_sigs.entry(scope).or_default().insert(name, sig);
+    }
+
     fn dirs_at(&self, offset: u32) -> Vec<&OwnDirective> {
         let mut out = Vec::new();
         if let Some(atts) = self.annots.get(&offset) {
@@ -609,7 +629,7 @@ impl FileCtx<'_> {
         if let Some(sig) = self.type_sig_at(&offs) {
             if let Some(name) = func.name() {
                 let n = name.as_str().to_string();
-                self.sigs.insert(n.clone(), sig.clone());
+                self.insert_sig(n.clone(), sig.clone());
                 if !self.ns_prefix.is_empty() {
                     self.sigs
                         .insert(format!("{}.{n}", self.ns_prefix.join(".")), sig);
@@ -635,9 +655,11 @@ impl FileCtx<'_> {
         }
         self.collect_param_default_object_methods(&func.params);
         if let Some(body) = &func.body {
+            self.collect_fn_scopes.push(func.span.start);
             for s in &body.statements {
                 self.collect_sigs_stmt(s, None);
             }
+            self.collect_fn_scopes.pop();
         }
     }
 
@@ -659,7 +681,7 @@ impl FileCtx<'_> {
                         self.sigs
                             .insert(format!("{}.{name}", self.ns_prefix.join(".")), sig.clone());
                     }
-                    self.sigs.insert(name, sig);
+                    self.insert_sig(name, sig);
                 }
             }
             self.collect_binding_defaults(&d.id);
@@ -1326,10 +1348,10 @@ impl FileCtx<'_> {
         }
         if let Some(sig) = self.type_sig_at(&offs) {
             if is_static {
-                self.sigs.insert(format!("{cname}.{meth}"), sig);
+                self.insert_sig(format!("{cname}.{meth}"), sig);
             } else {
-                self.sigs.insert(format!("{cname}#{meth}"), sig.clone());
-                self.sigs.insert(format!("{cname}.{meth}"), sig);
+                self.insert_sig(format!("{cname}#{meth}"), sig.clone());
+                self.insert_sig(format!("{cname}.{meth}"), sig);
             }
         }
     }
@@ -1346,7 +1368,7 @@ impl FileCtx<'_> {
                         offs.push(id.span.start);
                     }
                     if let Some(sig) = self.type_sig_at(&offs) {
-                        self.sigs.insert(format!("{prefix}.{name}"), sig);
+                        self.insert_sig(format!("{prefix}.{name}"), sig);
                     }
                     self.collect_object_methods_from(&p.value, &format!("{prefix}.{name}"));
                 }
@@ -1415,14 +1437,14 @@ impl FileCtx<'_> {
             offs.push(id.span.start);
         }
         if let Some(sig) = self.type_sig_at(&offs) {
-            self.sigs.insert(name.to_string(), sig);
+            self.insert_sig(name.to_string(), sig);
         }
         self.collect_fn(func, extra);
     }
 
     fn collect_arrow_under_name(&mut self, arrow: &ArrowFunctionExpression<'_>, name: &str) {
         if let Some(sig) = self.type_sig_at(&[arrow.span.start]) {
-            self.sigs.insert(name.to_string(), sig);
+            self.insert_sig(name.to_string(), sig);
         }
         self.collect_sigs_arrow(arrow);
     }
@@ -1572,7 +1594,7 @@ impl FileCtx<'_> {
         }
         if let Some(sig) = self.type_sig_at(&offs) {
             if let Some(name) = ident_of_pattern(pat) {
-                self.sigs.insert(name, sig);
+                self.insert_sig(name, sig);
             }
         }
         self.collect_binding_object_methods(pat, &p.value);
@@ -1584,7 +1606,7 @@ impl FileCtx<'_> {
             offs.push(id.span.start);
         }
         if let Some(sig) = self.type_sig_at(&offs) {
-            self.sigs.insert(name.to_string(), sig);
+            self.insert_sig(name.to_string(), sig);
         }
         self.collect_object_methods_from(&p.value, name);
     }
@@ -2430,9 +2452,11 @@ impl FileCtx<'_> {
         self.collect_param_default_object_methods(&arrow.params);
         match &arrow.body {
             ArrowFunctionBody::FunctionBody(body) => {
+                self.collect_fn_scopes.push(arrow.span.start);
                 for s in &body.statements {
                     self.collect_sigs_stmt(s, None);
                 }
+                self.collect_fn_scopes.pop();
             }
             other => {
                 if let Some(e) = other.as_expression() {
@@ -2527,12 +2551,25 @@ struct Checker<'a> {
     pending_finally: Vec<Option<HashMap<String, VarEntry>>>,
     /// Skip re-entry so the first annotation offsets win.
     checked_bodies: HashSet<u32>,
+    callee_scopes: Vec<u32>,
     features: OwnFeatures,
 }
 
 impl Checker<'_> {
     fn callee_sig(&self, name: &str) -> Option<&FnSig> {
         if self.features.local_callee_contracts {
+            for scope in self.callee_scopes.iter().rev().copied().chain(std::iter::once(
+                FileCtx::ROOT_SIG_SCOPE,
+            )) {
+                if let Some(sig) = self
+                    .file
+                    .scoped_sigs
+                    .get(&scope)
+                    .and_then(|sigs| sigs.get(name))
+                {
+                    return Some(sig);
+                }
+            }
             self.file.sigs.get(name)
         } else {
             self.file.prelude_sigs.get(name)
@@ -3669,6 +3706,7 @@ impl Checker<'_> {
         if !self.enter_body(func.span.start) {
             return;
         }
+        self.callee_scopes.push(func.span.start);
         if let Some(tp) = &func.type_parameters {
             self.check_ts_type_params(tp);
         }
@@ -3688,6 +3726,7 @@ impl Checker<'_> {
         self.check_param_default_captures(func);
         if let Some(sig) = self.file.type_sig_at(&offs) {
             self.check_function_with_sig(func, &sig);
+            self.callee_scopes.pop();
             return;
         }
         if let Some(body) = &func.body {
@@ -3722,6 +3761,7 @@ impl Checker<'_> {
             self.try_finally_depth = saved_finally;
             self.pending_finally = saved_pending;
         }
+        self.callee_scopes.pop();
     }
 
     fn check_function_with_sig(&mut self, func: &Function<'_>, sig: &FnSig) {
@@ -3773,6 +3813,7 @@ impl Checker<'_> {
         if !self.enter_body(arrow.span.start) {
             return;
         }
+        self.callee_scopes.push(arrow.span.start);
         if let Some(tp) = &arrow.type_parameters {
             self.check_ts_type_params(tp);
         }
@@ -3833,6 +3874,7 @@ impl Checker<'_> {
         self.fn_ret = saved_ret;
         self.try_finally_depth = saved_finally;
         self.pending_finally = saved_pending;
+        self.callee_scopes.pop();
     }
 
     fn propagate_tbl_to_pending(&mut self) {
@@ -6538,6 +6580,7 @@ impl Checker<'_> {
         if !self.enter_body(arrow.span.start) {
             return;
         }
+        self.callee_scopes.push(arrow.span.start);
         if let Some(tp) = &arrow.type_parameters {
             self.check_ts_type_params(tp);
         }
@@ -6579,6 +6622,7 @@ impl Checker<'_> {
         self.fn_ret = saved_ret;
         self.try_finally_depth = saved_finally;
         self.pending_finally = saved_pending;
+        self.callee_scopes.pop();
     }
 
     fn report_captures_arrow(&mut self, arrow: &ArrowFunctionExpression<'_>) {
