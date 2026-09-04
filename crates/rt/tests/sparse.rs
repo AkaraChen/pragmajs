@@ -8,15 +8,19 @@ use pragma_rt::{
         CompilerTypeProviderError, CompilerTypeRequest,
     },
 };
-use std::path::Path;
+use std::{cell::RefCell, path::Path};
 
-struct NumberProvider;
+#[derive(Default)]
+struct NumberProvider {
+    requests: RefCell<Vec<CompilerTypeRequest>>,
+}
 
 impl CompilerTypeProvider for NumberProvider {
     fn analyze(
         &self,
         request: &CompilerTypeRequest,
     ) -> Result<CompilerTypeAnalysis, CompilerTypeProviderError> {
+        self.requests.borrow_mut().push(request.clone());
         Ok(CompilerTypeAnalysis {
             types: request
                 .byte_offsets
@@ -72,7 +76,7 @@ const x: number = 0;
         file_name,
         &annotations,
         Environment::Ecmascript,
-        &NumberProvider,
+        &NumberProvider::default(),
         Path::new("/tmp/pragmajs-tsconfig.json"),
         Path::new(file_name),
     )
@@ -83,6 +87,69 @@ const x: number = 0;
             .contains("does not satisfy its refinement")
             || error.message.contains("Initializer")),
         "expected a refinement finding after filling number, got {errors:#?}"
+    );
+}
+
+#[test]
+fn parsed_compiler_wrapper_matches_source_wrapper_queries_and_diagnostics() {
+    let source = r#"
+/*#rt type: | x > 0 */
+const x: number = 0;
+"#;
+    let file_name = "sparse-parity.ts";
+    let config_path = Path::new("/tmp/pragmajs-tsconfig.json");
+    let source_path = Path::new(file_name);
+    let allocator = pragma_parse::Allocator::default();
+    let parsed = pragma_parse::parse(&allocator, file_name, source);
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "fixture must parse: {:?}",
+        parsed.diagnostics
+    );
+    let annotations = parser::annotations_from_program(source, file_name, &parsed.program)
+        .expect("fixture annotations must parse")
+        .annotations;
+
+    let source_provider = NumberProvider::default();
+    let source_errors = checker::check_source_with_environment_and_compiler(
+        source,
+        file_name,
+        &annotations,
+        Environment::Ecmascript,
+        &source_provider,
+        config_path,
+        source_path,
+    )
+    .expect("recording provider cannot fail");
+
+    let parsed_provider = NumberProvider::default();
+    let parsed_errors = checker::check_program_with_environment_and_compiler(
+        source,
+        file_name,
+        &parsed.program,
+        &annotations,
+        Environment::Ecmascript,
+        &parsed_provider,
+        config_path,
+        source_path,
+    )
+    .expect("recording provider cannot fail");
+
+    assert_eq!(parsed_errors, source_errors);
+    assert!(
+        parsed_errors
+            .iter()
+            .any(|error| error.message.contains("does not satisfy its refinement")),
+        "fixture should exercise compiler-filled refinement checking: {parsed_errors:#?}"
+    );
+    let parsed_requests = parsed_provider.requests.into_inner();
+    let source_requests = source_provider.requests.into_inner();
+    assert_eq!(parsed_requests.len(), 1);
+    assert!(!parsed_requests[0].byte_offsets.is_empty());
+    assert_eq!(
+        parsed_requests,
+        source_requests,
+        "pre-parsed and source wrappers must issue identical compiler queries"
     );
 }
 
@@ -99,7 +166,7 @@ const x: number = 9;
         file_name,
         &annotations,
         Environment::Ecmascript,
-        &NumberProvider,
+        &NumberProvider::default(),
         Path::new("/tmp/pragmajs-tsconfig.json"),
         Path::new(file_name),
     )
