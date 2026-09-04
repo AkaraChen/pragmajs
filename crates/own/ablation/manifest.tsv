@@ -37,3 +37,4 @@ fixtures/out-of-domain-actual-capture.js	OUT_OF_DOMAIN:unmapped
 fixtures/accept-lexically-resolved-callee.js	ACCEPT
 fixtures/reject-assignment-loses-ownership.js	REJECT:unique-forget
 fixtures/reject-aggregate-store-forget.js	REJECT:unique-forget
+fixtures/reject-optional-call-then-reuse.js	REJECT:use-after-move

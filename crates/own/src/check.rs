@@ -5241,6 +5241,9 @@ impl Checker<'_> {
             Expression::ParenthesizedExpression(p) => self.count(&p.expression, name),
             Expression::ChainExpression(c) => match &c.expression {
                 oxc::ast::ast::ChainElement::CallExpression(call) => {
+                    if !self.features.optional_call_paths {
+                        return self.count_call(call, name);
+                    }
                     // Optional calls may not run; do not definite-consume this/args.
                     let mut a = Apps::default();
                     if let Expression::StaticMemberExpression(m) = &call.callee {

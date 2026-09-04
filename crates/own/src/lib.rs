@@ -47,11 +47,12 @@ pub enum OwnAblation {
     LoopDepth,
     NonConsumingPaths,
     UnknownCallConservatism,
+    OptionalCallPaths,
     UnmappedGuards,
 }
 
 impl OwnAblation {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::FunctionContracts,
         Self::MoveTracking,
         Self::ExactOnce,
@@ -65,6 +66,7 @@ impl OwnAblation {
         Self::LoopDepth,
         Self::NonConsumingPaths,
         Self::UnknownCallConservatism,
+        Self::OptionalCallPaths,
         Self::UnmappedGuards,
     ];
 
@@ -83,6 +85,7 @@ impl OwnAblation {
             Self::LoopDepth => "loop-depth",
             Self::NonConsumingPaths => "non-consuming-paths",
             Self::UnknownCallConservatism => "unknown-call-conservatism",
+            Self::OptionalCallPaths => "optional-call-paths",
             Self::UnmappedGuards => "unmapped-guards",
         }
     }
@@ -107,6 +110,7 @@ pub struct OwnFeatures {
     pub loop_depth: bool,
     pub non_consuming_paths: bool,
     pub unknown_call_conservatism: bool,
+    pub optional_call_paths: bool,
     pub unmapped_guards: bool,
 }
 
@@ -126,6 +130,7 @@ impl OwnFeatures {
             loop_depth: true,
             non_consuming_paths: true,
             unknown_call_conservatism: true,
+            optional_call_paths: true,
             unmapped_guards: true,
         }
     }
@@ -146,6 +151,7 @@ impl OwnFeatures {
             OwnAblation::LoopDepth => features.loop_depth = false,
             OwnAblation::NonConsumingPaths => features.non_consuming_paths = false,
             OwnAblation::UnknownCallConservatism => features.unknown_call_conservatism = false,
+            OwnAblation::OptionalCallPaths => features.optional_call_paths = false,
             OwnAblation::UnmappedGuards => features.unmapped_guards = false,
         }
         features

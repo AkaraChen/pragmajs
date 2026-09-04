@@ -65,3 +65,26 @@ fn runtime_prelude_ablation_has_an_observed_witness() {
             != outcome(path, source, OwnFeatures::all(), Runtime::None)
     }));
 }
+
+#[test]
+fn optional_call_path_ablation_exposes_conditional_consume() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("ablation/fixtures/reject-optional-call-then-reuse.js");
+    let source = fs::read_to_string(&path).unwrap();
+
+    assert_eq!(
+        outcome(&path, &source, OwnFeatures::all(), Runtime::Node),
+        Vec::<&'static str>::new(),
+        "the default optional-call path approximation should preserve existing behavior",
+    );
+    assert_eq!(
+        outcome(
+            &path,
+            &source,
+            OwnFeatures::without(OwnAblation::OptionalCallPaths),
+            Runtime::Node,
+        ),
+        vec!["use-after-move"],
+        "ordinary call transfer should expose reuse after the conditional consume",
+    );
+}
