@@ -141,9 +141,9 @@ in `binop.rs` stay skipped (integer overflow / bitvector territory).
 ### Solver policy after ablation
 
 Production checks the preprocessed implication directly with SMT, and only SMT
-`Unsat` is a proof. The former Fixedpoint-first policy remains selectable as a
-legacy differential backend. Binding identity (`Same`) uses SMT equality; JS
-`===` on `Number` uses IEEE `eq_fpa`.
+`Unsat` is a proof. The former Fixedpoint-first policy was removed after debug
+and release corpus differentials found no diagnostic benefit. Binding identity
+(`Same`) uses SMT equality; JS `===` on `Number` uses IEEE `eq_fpa`.
 
 ### Ownership is not welded on
 

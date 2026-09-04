@@ -17,23 +17,6 @@ pub fn check_source_with_environment(
     )
 }
 
-/// Experimental entry point for comparing constraint backends.
-pub fn check_source_with_environment_and_solver(
-    source: &str,
-    file_name: &str,
-    annotations: &[Annotation],
-    environment: crate::prelude::Environment,
-    constraint_solver: crate::verifier::ConstraintSolver,
-) -> Vec<RtError> {
-    check_source_with_environment_and_features(
-        source,
-        file_name,
-        annotations,
-        environment,
-        constraint_solver.into(),
-    )
-}
-
 /// Experimental entry point for controlled verifier ablations.
 pub fn check_source_with_environment_and_features(
     source: &str,
@@ -103,25 +86,6 @@ pub fn check_program_with_environment(
         annotations,
         environment,
         crate::verifier::RtFeatures::default(),
-    )
-}
-
-/// Experimental parsed-program entry point for comparing constraint backends.
-pub fn check_program_with_environment_and_solver(
-    source: &str,
-    file_name: &str,
-    program: &Program<'_>,
-    annotations: &[Annotation],
-    environment: crate::prelude::Environment,
-    constraint_solver: crate::verifier::ConstraintSolver,
-) -> Vec<RtError> {
-    check_program_with_environment_and_features(
-        source,
-        file_name,
-        program,
-        annotations,
-        environment,
-        constraint_solver.into(),
     )
 }
 

@@ -161,9 +161,10 @@ side effects cannot disappear merely because they occur inside a callback
 return expression.
 
 The production verifier sends each preprocessed implication directly to Z3
-SMT; only `unsat` counts as proof. The former Fixedpoint-plus-SMT path remains
-available only as an explicit ablation backend. An `unknown` result rejects the
-obligation and is never treated as proof.
+SMT; only `unsat` counts as proof. The former Fixedpoint-plus-SMT path was
+removed after corpus differentials found no diagnostic change and consistent
+slowdown. An `unknown` result rejects the obligation and is never treated as
+proof.
 
 ## Provenance model and the three final fixes
 

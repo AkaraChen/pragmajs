@@ -21,8 +21,8 @@ use pragma_parse::parse;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use z3::{
-    Fixedpoint, FuncDecl, SatResult, Solver, Sort as Z3Sort, Symbol,
-    ast::{self, Ast, Bool, Dynamic, Float, Int as Z3Int, RoundingMode, String as Z3String},
+    FuncDecl, SatResult, Solver, Sort as Z3Sort, Symbol,
+    ast::{Bool, Dynamic, Float, Int as Z3Int, RoundingMode, String as Z3String},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -170,21 +170,12 @@ impl Default for State {
     }
 }
 
-/// A liquid subtyping obligation in Horn-clause form:
-/// `assumptions => consequent`. Abstract predicate applications are reduced to
-/// freely chosen Boolean atoms with congruence constraints before the Horn
-/// rule is sent to Z3.
-struct FixpointConstraint<'a> {
+/// A liquid subtyping obligation of the form `assumptions => consequent`.
+/// Abstract predicate applications are reduced to freely chosen Boolean atoms
+/// with congruence constraints before the implication is sent to Z3.
+struct RefinementConstraint<'a> {
     assumptions: &'a [Term],
     consequent: &'a Term,
-}
-
-/// Constraint backend selector used by the ablation runner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ConstraintSolver {
-    FixedpointWithSmtFallback,
-    #[default]
-    DirectSmt,
 }
 
 /// Optional verifier components exposed for controlled ablation experiments.
@@ -197,7 +188,6 @@ pub enum RtAblation {
 /// Verifier configuration. The default retains the production behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RtFeatures {
-    pub constraint_solver: ConstraintSolver,
     pub int_conversion_axioms: bool,
     pub abstract_predicate_congruence: bool,
 }
@@ -217,18 +207,8 @@ impl RtFeatures {
 impl Default for RtFeatures {
     fn default() -> Self {
         Self {
-            constraint_solver: ConstraintSolver::default(),
             int_conversion_axioms: true,
             abstract_predicate_congruence: true,
-        }
-    }
-}
-
-impl From<ConstraintSolver> for RtFeatures {
-    fn from(constraint_solver: ConstraintSolver) -> Self {
-        Self {
-            constraint_solver,
-            ..Self::default()
         }
     }
 }
@@ -4342,7 +4322,7 @@ impl Verifier<'_> {
 
     fn path_is_reachable(&self, state: &State) -> bool {
         let impossible = Term::Bool(false);
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions: &state.assumptions,
             consequent: &impossible,
         };
@@ -4353,7 +4333,7 @@ impl Verifier<'_> {
     }
 
     fn prove(&mut self, assumptions: &[Term], goal: &Term, message: String, loc: SourceLocation) {
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions,
             consequent: goal,
         };
@@ -4375,7 +4355,7 @@ impl Verifier<'_> {
     }
 
     fn obligation_holds(&self, assumptions: &[Term], goal: &Term) -> bool {
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions,
             consequent: goal,
         };
@@ -4647,12 +4627,12 @@ fn collect_int_literals(term: &Term, output: &mut HashSet<i64>) {
 }
 
 #[cfg(test)]
-fn solve_constraint(constraint: &FixpointConstraint<'_>) -> Result<SatResult, String> {
+fn solve_constraint(constraint: &RefinementConstraint<'_>) -> Result<SatResult, String> {
     solve_constraint_using(constraint, RtFeatures::default())
 }
 
 fn solve_constraint_using(
-    constraint: &FixpointConstraint<'_>,
+    constraint: &RefinementConstraint<'_>,
     features: RtFeatures,
 ) -> Result<SatResult, String> {
     let (mut assumptions, consequent) =
@@ -4668,84 +4648,11 @@ fn solve_constraint_using(
     if assumptions.contains(&consequent) {
         return Ok(SatResult::Unsat);
     }
-    if features.constraint_solver == ConstraintSolver::DirectSmt {
-        return solve_constraint_with_smt(&assumptions, &consequent);
-    }
-    let constraint = FixpointConstraint {
-        assumptions: &assumptions,
-        consequent: &consequent,
-    };
-    let fixedpoint = Fixedpoint::new();
-    let bool_sort = Z3Sort::bool();
-    let bad_decl = FuncDecl::new("__rt_bad", &[], &bool_sort);
-    fixedpoint.register_relation(&bad_decl);
-    let bad = bad_decl.apply(&[]).as_bool().unwrap();
-
-    let mut body = Vec::new();
-    for assumption in &assumptions {
-        match to_z3(assumption)? {
-            ZTerm::Bool(value) => body.push(value),
-            ZTerm::Number(_) | ZTerm::Int(_) | ZTerm::String(_) | ZTerm::Ref(_) => {
-                return Err("Fixpoint assumption is not boolean".into());
-            }
-        }
-    }
-    let ZTerm::Bool(goal) = to_z3(&consequent)? else {
-        return Err("Refinement predicate is not boolean".into());
-    };
-    body.push(goal.not());
-    let body_refs: Vec<&Bool> = body.iter().collect();
-    let rule = Bool::and(&body_refs).implies(&bad);
-
-    let variables = constraint_variables(&constraint);
-    let number_vars: Vec<Float> = variables
-        .iter()
-        .filter(|(_, sort)| *sort == Sort::Number)
-        .map(|(name, _)| Float::new_const_double(name.as_str()))
-        .collect();
-    let int_vars: Vec<Z3Int> = variables
-        .iter()
-        .filter(|(_, sort)| *sort == Sort::Int)
-        .map(|(name, _)| Z3Int::new_const(name.as_str()))
-        .collect();
-    let bool_vars: Vec<Bool> = variables
-        .iter()
-        .filter(|(_, sort)| *sort == Sort::Bool)
-        .map(|(name, _)| Bool::new_const(name.as_str()))
-        .collect();
-    let string_vars: Vec<Z3String> = variables
-        .iter()
-        .filter(|(_, sort)| *sort == Sort::String)
-        .map(|(name, _)| Z3String::new_const(name.as_str()))
-        .collect();
-    let reference_sort = Z3Sort::uninterpreted(Symbol::String("Ref".into()));
-    let reference_vars: Vec<Dynamic> = variables
-        .iter()
-        .filter(|(_, sort)| *sort == Sort::Ref)
-        .map(|(name, _)| Dynamic::new_const(name.as_str(), &reference_sort))
-        .collect();
-    let mut bounds: Vec<&dyn Ast> = number_vars.iter().map(|var| var as &dyn Ast).collect();
-    bounds.extend(int_vars.iter().map(|var| var as &dyn Ast));
-    bounds.extend(bool_vars.iter().map(|var| var as &dyn Ast));
-    bounds.extend(string_vars.iter().map(|var| var as &dyn Ast));
-    bounds.extend(reference_vars.iter().map(|var| var as &dyn Ast));
-    let rule = ast::forall_const(&bounds, &[], &rule);
-    fixedpoint.add_rule(&rule, Some("refinement_violation"));
-    match fixedpoint.query(&bad) {
-        SatResult::Sat => Ok(SatResult::Sat),
-        SatResult::Unknown | SatResult::Unsat => {
-            // Fixedpoint may report Unsat for IEEE-754 obligations that SMT
-            // still finds a counterexample for (for example `x === x` on NaN).
-            // Only SMT Unsat is a proof; Sat/Unknown fail closed.
-            solve_constraint_with_smt(&assumptions, &consequent)
-        }
-    }
+    solve_constraint_with_smt(&assumptions, &consequent)
 }
 
-/// Fixedpoint can return `unknown` for otherwise decidable formulas combining
-/// floating-point terms with uninterpreted member functions. The same liquid
-/// implication is a quantifier-free SMT query when its free variables are
-/// represented as constants, so use the general solver as a sound fallback.
+/// Check the negation of a liquid implication as a quantifier-free SMT query,
+/// representing its free variables as constants. Only `Unsat` is a proof.
 fn solve_constraint_with_smt(assumptions: &[Term], consequent: &Term) -> Result<SatResult, String> {
     let solver = Solver::new();
     for assumption in assumptions {
@@ -4761,17 +4668,11 @@ fn solve_constraint_with_smt(assumptions: &[Term], consequent: &Term) -> Result<
     Ok(solver.check())
 }
 
-/// Fixedpoint relations have least-model semantics. Registering an abstract
-/// predicate parameter such as `p` without defining rules would therefore
-/// make `p` empty and could prove arbitrary consequences from `p(x)`.
-///
 /// Treat every predicate application as a freely chosen Boolean atom instead.
 /// Pairwise congruence constraints preserve the uninterpreted-function law
-/// that equal arguments have equal predicate results. The resulting formula
-/// is still checked as a Horn rule by `Fixedpoint`, but no empty least model
-/// can discharge a polymorphic obligation vacuously.
+/// that equal arguments have equal predicate results.
 fn abstract_predicate_applications(
-    constraint: &FixpointConstraint<'_>,
+    constraint: &RefinementConstraint<'_>,
     preserve_congruence: bool,
 ) -> Result<(Vec<Term>, Term), String> {
     let mut atoms = Vec::new();
@@ -5860,47 +5761,6 @@ fn signature_parameter(
             .last()
             .filter(|parameter| parameter.rest)
     })
-}
-
-fn constraint_variables(constraint: &FixpointConstraint<'_>) -> Vec<(String, Sort)> {
-    let mut variables = std::collections::BTreeMap::new();
-    for term in constraint
-        .assumptions
-        .iter()
-        .chain(std::iter::once(constraint.consequent))
-    {
-        collect_variables(term, &mut variables);
-    }
-    variables.into_iter().collect()
-}
-
-fn collect_variables(term: &Term, output: &mut std::collections::BTreeMap<String, Sort>) {
-    match term {
-        Term::Var(name, sort) => {
-            output.insert(name.clone(), *sort);
-        }
-        Term::Add(left, right)
-        | Term::Sub(left, right)
-        | Term::Mul(left, right)
-        | Term::Same(left, right)
-        | Term::Eq(left, right)
-        | Term::Ne(left, right)
-        | Term::Gt(left, right)
-        | Term::Lt(left, right)
-        | Term::Ge(left, right)
-        | Term::Le(left, right)
-        | Term::And(left, right)
-        | Term::Or(left, right)
-        | Term::Index(left, right, _) => {
-            collect_variables(left, output);
-            collect_variables(right, output);
-        }
-        Term::Not(inner)
-        | Term::Pred(_, inner)
-        | Term::Member(inner, _, _)
-        | Term::ToNumber(inner) => collect_variables(inner, output),
-        Term::Number(_) | Term::Int(_) | Term::Bool(_) | Term::String(_) => {}
-    }
 }
 
 enum ZTerm {
@@ -7134,7 +6994,7 @@ mod ieee_equality_tests {
         let x = Term::Var("x".into(), Sort::Number);
         let self_eq = Term::Eq(Box::new(x.clone()), Box::new(x.clone()));
         let is_true = Term::Eq(Box::new(self_eq), Box::new(Term::Bool(true)));
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions: &[],
             consequent: &is_true,
         };
@@ -7151,17 +7011,9 @@ mod ieee_equality_tests {
 mod ablation_tests {
     use super::*;
 
-    fn direct_smt_features() -> RtFeatures {
-        RtFeatures {
-            constraint_solver: ConstraintSolver::DirectSmt,
-            ..RtFeatures::default()
-        }
-    }
-
     #[test]
     fn defaults_keep_all_verifier_features_enabled() {
         let features = RtFeatures::default();
-        assert_eq!(features.constraint_solver, ConstraintSolver::DirectSmt);
         assert!(features.int_conversion_axioms);
         assert!(features.abstract_predicate_congruence);
     }
@@ -7172,19 +7024,19 @@ mod ablation_tests {
             Box::new(Term::ToNumber(Box::new(Term::Int(1)))),
             Box::new(Term::Number(1)),
         );
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions: &[],
             consequent: &goal,
         };
 
         assert_eq!(
-            solve_constraint_using(&constraint, direct_smt_features()).unwrap(),
+            solve_constraint_using(&constraint, RtFeatures::default()).unwrap(),
             SatResult::Unsat
         );
         assert_eq!(
             solve_constraint_using(
                 &constraint,
-                direct_smt_features().without(RtAblation::IntConversionAxioms),
+                RtFeatures::default().without(RtAblation::IntConversionAxioms),
             )
             .unwrap(),
             SatResult::Sat
@@ -7200,19 +7052,19 @@ mod ablation_tests {
             Term::Pred("p".into(), Box::new(x)),
         ];
         let goal = Term::Pred("p".into(), Box::new(y));
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions: &assumptions,
             consequent: &goal,
         };
 
         assert_eq!(
-            solve_constraint_using(&constraint, direct_smt_features()).unwrap(),
+            solve_constraint_using(&constraint, RtFeatures::default()).unwrap(),
             SatResult::Unsat
         );
         assert_eq!(
             solve_constraint_using(
                 &constraint,
-                direct_smt_features().without(RtAblation::AbstractPredicateCongruence),
+                RtFeatures::default().without(RtAblation::AbstractPredicateCongruence),
             )
             .unwrap(),
             SatResult::Sat
@@ -7223,13 +7075,13 @@ mod ablation_tests {
     fn congruence_ablation_still_validates_predicate_domains() {
         let assumptions = vec![Term::Pred("p".into(), Box::new(Term::Int(0)))];
         let goal = Term::Pred("p".into(), Box::new(Term::Bool(true)));
-        let constraint = FixpointConstraint {
+        let constraint = RefinementConstraint {
             assumptions: &assumptions,
             consequent: &goal,
         };
         let error = solve_constraint_using(
             &constraint,
-            direct_smt_features().without(RtAblation::AbstractPredicateCongruence),
+            RtFeatures::default().without(RtAblation::AbstractPredicateCongruence),
         )
         .expect_err("mixed predicate domains must remain an error");
 

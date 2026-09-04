@@ -2,7 +2,7 @@ use pragma_rt::checker::check_source_with_environment_and_features;
 use pragma_rt::parser;
 use pragma_rt::prelude::Environment;
 use pragma_rt::syntax::{Annotation, RtError};
-use pragma_rt::verifier::{ConstraintSolver, RtAblation, RtFeatures};
+use pragma_rt::verifier::{RtAblation, RtFeatures};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -179,15 +179,6 @@ fn main() -> Result<(), String> {
         .unwrap_or(3);
     let baseline_features = RtFeatures::default();
     let baseline = evaluate("direct-smt (production)", &cases, baseline_features, rounds);
-    let fixedpoint = evaluate(
-        "fixedpoint+smt-fallback (legacy)",
-        &cases,
-        RtFeatures {
-            constraint_solver: ConstraintSolver::FixedpointWithSmtFallback,
-            ..baseline_features
-        },
-        rounds,
-    );
     let no_int_conversion_axioms = evaluate(
         "no-int-conversion-axioms",
         &cases,
@@ -212,7 +203,6 @@ fn main() -> Result<(), String> {
     println!("|---|---:|---:|---:|---:|---:|");
     for run in [
         &baseline,
-        &fixedpoint,
         &no_int_conversion_axioms,
         &no_abstract_predicate_congruence,
     ] {
@@ -226,11 +216,7 @@ fn main() -> Result<(), String> {
             run.median.as_secs_f64() * 1000.0,
         );
     }
-    for run in [
-        &fixedpoint,
-        &no_int_conversion_axioms,
-        &no_abstract_predicate_congruence,
-    ] {
+    for run in [&no_int_conversion_axioms, &no_abstract_predicate_congruence] {
         report_delta(&baseline, run, &cases);
     }
     Ok(())
