@@ -192,12 +192,3 @@ fn runtime_catalogs_are_isolated_and_modules_support_aliases_and_overloads() {
     assert!(bun.module_export("bun:test", "test").is_some());
     assert!(bun.module_export("node:fs", "readFileSync").is_some());
 }
-
-#[test]
-fn catalog_iteration_is_lexically_deterministic() {
-    let catalog = catalog::build(Environment::Bun);
-    let globals: Vec<_> = catalog.globals().map(|(name, _)| name).collect();
-    assert!(globals.windows(2).all(|pair| pair[0] < pair[1]));
-    let modules: Vec<_> = catalog.modules().map(|(name, _)| name).collect();
-    assert!(modules.windows(2).all(|pair| pair[0] < pair[1]));
-}

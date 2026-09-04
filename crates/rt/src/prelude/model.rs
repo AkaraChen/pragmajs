@@ -243,16 +243,6 @@ impl LibraryRegistry {
         self.module(specifier)?.exports.get(export)
     }
 
-    pub fn globals(&self) -> impl Iterator<Item = (&str, &RefinementType)> {
-        self.globals.iter().map(|(name, ty)| (name.as_str(), ty))
-    }
-
-    pub fn modules(&self) -> impl Iterator<Item = (&str, &LibraryModule)> {
-        self.modules
-            .iter()
-            .map(|(name, module)| (name.as_str(), module))
-    }
-
     pub(crate) fn add_global(&mut self, name: &str, ty: RefinementType) {
         if let Some(previous) = self.globals.insert(name.to_string(), ty.clone()) {
             assert_eq!(previous, ty, "conflicting ambient global '{name}'");
