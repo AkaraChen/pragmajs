@@ -1,5 +1,6 @@
 use crate::syntax::*;
 use oxc_ast::ast::Program;
+use pragma_loc::utf16_offset_to_line_col;
 use std::path::Path;
 
 pub fn check_source_with_environment(
@@ -324,7 +325,7 @@ fn compiler_errors(
             let diagnostic_is_for_source =
                 diagnostic.file.is_empty() || Path::new(&diagnostic.file) == source_path;
             let (line, column) = if diagnostic_is_for_source {
-                utf16_offset_to_line_column(source, diagnostic.range.start_utf16)
+                utf16_offset_to_line_col(source, diagnostic.range.start_utf16)
             } else {
                 (1, 1)
             };
@@ -349,23 +350,4 @@ fn compiler_errors(
             }
         })
         .collect()
-}
-
-fn utf16_offset_to_line_column(source: &str, target: u32) -> (u32, u32) {
-    let mut offset = 0u32;
-    let mut line = 1u32;
-    let mut column = 1u32;
-    for character in source.chars() {
-        if offset >= target {
-            break;
-        }
-        offset = offset.saturating_add(character.len_utf16() as u32);
-        if character == '\n' {
-            line = line.saturating_add(1);
-            column = 1;
-        } else {
-            column = column.saturating_add(character.len_utf16() as u32);
-        }
-    }
-    (line, column)
 }

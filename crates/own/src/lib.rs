@@ -24,7 +24,7 @@ pub use check::{
     check_program_with_payloads_and_features, omitted_payload_offsets, own_payload_name,
     PayloadNames,
 };
-pub use pragma_loc::offset_to_line_col;
+pub use pragma_loc::byte_offset_to_line_col;
 pub use prelude::Runtime;
 
 /// One semantic or engineering assumption that can be removed in an ablation run.
@@ -233,7 +233,7 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn line_col(&self, source: &str) -> (u32, u32) {
-        offset_to_line_col(source, self.offset)
+        byte_offset_to_line_col(source, self.offset)
     }
 
     pub fn format_line(&self, source: &str) -> String {

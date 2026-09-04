@@ -17,6 +17,7 @@ use oxc_span::{GetSpan, Span};
 use oxc_syntax::operator::{
     AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator, UpdateOperator,
 };
+use pragma_loc::byte_offset_to_line_col;
 use pragma_parse::parse;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -4563,13 +4564,7 @@ impl Verifier<'_> {
     }
 
     fn location(&self, span: Span) -> SourceLocation {
-        let offset = span.start as usize;
-        let prefix = &self.source[..offset.min(self.source.len())];
-        let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32 + 1;
-        let column = prefix
-            .rsplit_once('\n')
-            .map_or(prefix.len(), |(_, tail)| tail.len()) as u32
-            + 1;
+        let (line, column) = byte_offset_to_line_col(self.source, span.start);
         SourceLocation {
             file: Some(self.file_name.into()),
             line,

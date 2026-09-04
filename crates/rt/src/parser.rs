@@ -4,7 +4,7 @@ use oxc_ast::ast::{BindingPattern, CommentPosition, Expression, Program, Stateme
 use oxc_ast_visit::Visit;
 use oxc_ast_visit::walk::walk_statement;
 use oxc_span::Span;
-use pragma_loc::offset_to_line_col;
+use pragma_loc::byte_offset_to_line_col;
 use pragma_parse::parse;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -868,7 +868,7 @@ pub fn annotations_from_program(
         }
 
         let Some(info) = best else { continue };
-        let (line, column) = offset_to_line_col(source, comment.span.start);
+        let (line, column) = byte_offset_to_line_col(source, comment.span.start);
         let loc = SourceLocation {
             file: Some(file_name.to_string()),
             line,
