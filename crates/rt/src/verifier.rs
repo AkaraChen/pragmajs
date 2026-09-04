@@ -6642,7 +6642,10 @@ fn base_has_unambiguous_catalog_identity(base: &BaseType) -> bool {
 
 fn declared_base_has_catalog_identity(base: &BaseType) -> bool {
     match base {
-        BaseType::Named(_) => false,
+        // Qualified host types cannot be produced accidentally by ordinary
+        // JavaScript values. An explicit contract such as `Bun.Server` or
+        // `NodeJS.Timeout` is therefore sufficient to opt into its catalog.
+        BaseType::Named(name) => name.contains('.'),
         BaseType::Generic(name, _) => {
             matches!(name.as_str(), "DenseArray" | "ReadonlyArray")
         }

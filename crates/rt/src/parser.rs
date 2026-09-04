@@ -481,8 +481,12 @@ impl TypeParser {
             TokenKind::LParen => self.parse_function_type(),
             TokenKind::LBrace => self.parse_object_type(),
             TokenKind::Ident => {
-                let name = self.peek().value.clone();
+                let mut name = self.peek().value.clone();
                 self.pos += 1;
+                while self.eat(TokenKind::Dot) {
+                    name.push('.');
+                    name.push_str(&self.expect_ident_raw()?);
+                }
                 match name.as_str() {
                     "number" | "string" | "boolean" | "unknown" | "any" | "void" => {
                         Ok(BaseType::Primitive(name))

@@ -25,6 +25,67 @@ fn parser_finds_annotations() {
 }
 
 #[test]
+fn parser_accepts_dotted_named_types_and_generics() {
+    let source = r#"
+/*#rt type: (server: Bun.Server, box: Vendor.Box<Bun.Server>) => Bun.Server */
+function keepServer(server, box) {
+  return server;
+}
+"#;
+    let result = parser::parse_file(source, "dotted.js").unwrap();
+    let parameter_types = result
+        .annotations
+        .iter()
+        .filter_map(|annotation| match &annotation.target {
+            syntax::AnnotationTarget::Param { index, .. } => Some((*index, &annotation.ty.base)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        parameter_types,
+        vec![
+            (0, &syntax::BaseType::Named("Bun.Server".into())),
+            (
+                1,
+                &syntax::BaseType::Generic(
+                    "Vendor.Box".into(),
+                    vec![syntax::BaseType::Named("Bun.Server".into())],
+                ),
+            ),
+        ]
+    );
+    let return_type = result
+        .annotations
+        .iter()
+        .find_map(|annotation| match &annotation.target {
+            syntax::AnnotationTarget::Return { .. } => Some(&annotation.ty.base),
+            _ => None,
+        });
+    assert_eq!(
+        return_type,
+        Some(&syntax::BaseType::Named("Bun.Server".into()))
+    );
+}
+
+#[test]
+fn checker_resolves_dotted_catalog_receiver_types() {
+    let source = r#"
+/*#rt type: (server: Bun.Server) => number | $ >= 0 */
+function serverPort(server) {
+  return server.port;
+}
+"#;
+    let result = parser::parse_file(source, "dotted.js").unwrap();
+    let errors = checker::check_source_with_environment(
+        source,
+        "dotted.js",
+        &result.annotations,
+        Environment::Bun,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+#[test]
 fn checker_accepts_valid() {
     let result = parser::parse_file(SQRT_SOURCE, "test.js").unwrap();
     let errors = checker::check_source_with_environment(
