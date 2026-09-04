@@ -432,8 +432,7 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
                 LibraryParameter::optional("init", primitive_type("object")),
             ],
             promise_type(named("Response")),
-        )
-        .with_effects(ambient_effects()),
+        ),
     );
     registry.add_static_function(
         "structuredClone",
@@ -676,16 +675,14 @@ fn add_node_globals(registry: &mut LibraryRegistry) {
 
     registry.add_static_function(
         "process.cwd",
-        FunctionSignature::new(Vec::new(), primitive_type("string"))
-            .with_effects(ambient_read_effects()),
+        FunctionSignature::new(Vec::new(), primitive_type("string")),
     );
     registry.add_static_function(
         "process.exit",
         FunctionSignature::new(
             vec![LibraryParameter::optional("code", primitive_type("number"))],
             primitive_type("never"),
-        )
-        .with_effects(ambient_effects()),
+        ),
     );
     registry.add_static_function(
         "Buffer.byteLength",
@@ -792,8 +789,7 @@ fn add_node_fs(registry: &mut LibraryRegistry) {
                     ),
                 ],
                 primitive_type("void"),
-            )
-            .with_effects(ambient_effects()),
+            ),
         ),
     );
     registry.add_module_alias("fs", "node:fs");
@@ -830,8 +826,7 @@ fn add_node_fs(registry: &mut LibraryRegistry) {
                     ),
                 ],
                 promise_type(primitive("void")),
-            )
-            .with_effects(ambient_effects()),
+            ),
         ),
     );
     registry.add_module_alias("fs/promises", "node:fs/promises");
@@ -877,24 +872,21 @@ fn add_deno(registry: &mut LibraryRegistry) {
     registry.add_global("Deno", named_type("Deno.Namespace"));
     registry.add_static_function(
         "Deno.cwd",
-        FunctionSignature::new(Vec::new(), primitive_type("string"))
-            .with_effects(ambient_read_effects()),
+        FunctionSignature::new(Vec::new(), primitive_type("string")),
     );
     registry.add_static_function(
         "Deno.readTextFile",
         FunctionSignature::new(
             vec![LibraryParameter::required("path", deno_path_type())],
             promise_type(primitive("string")),
-        )
-        .with_effects(ambient_read_effects()),
+        ),
     );
     registry.add_static_function(
         "Deno.readFile",
         FunctionSignature::new(
             vec![LibraryParameter::required("path", deno_path_type())],
             promise_type(named("Uint8Array")),
-        )
-        .with_effects(ambient_read_effects()),
+        ),
     );
     registry.add_static_function(
         "Deno.writeTextFile",
@@ -904,16 +896,14 @@ fn add_deno(registry: &mut LibraryRegistry) {
                 LibraryParameter::required("data", primitive_type("string")),
             ],
             promise_type(primitive("void")),
-        )
-        .with_effects(ambient_effects()),
+        ),
     );
     registry.add_static_function(
         "Deno.exit",
         FunctionSignature::new(
             vec![LibraryParameter::optional("code", primitive_type("number"))],
             primitive_type("never"),
-        )
-        .with_effects(ambient_effects()),
+        ),
     );
     registry.add_receiver_property(
         "Deno.Namespace",
@@ -966,8 +956,7 @@ fn add_bun(registry: &mut LibraryRegistry) {
         FunctionSignature::new(
             vec![LibraryParameter::required("path", bun_path_type())],
             named_type("BunFile"),
-        )
-        .with_effects(ambient_read_effects()),
+        ),
     );
     registry.add_static_function(
         "Bun.write",
@@ -980,8 +969,7 @@ fn add_bun(registry: &mut LibraryRegistry) {
                 ),
             ],
             promise_type(primitive("number")),
-        )
-        .with_effects(ambient_effects()),
+        ),
     );
     registry.add_static_function(
         "Bun.sleep",
@@ -991,13 +979,11 @@ fn add_bun(registry: &mut LibraryRegistry) {
                 primitive_type("number"),
             )],
             promise_type(primitive("void")),
-        )
-        .with_effects(ambient_effects()),
+        ),
     );
     registry.add_static_function(
         "Bun.nanoseconds",
-        FunctionSignature::new(Vec::new(), non_negative_number())
-            .with_effects(ambient_read_effects()),
+        FunctionSignature::new(Vec::new(), non_negative_number()),
     );
     registry.add_static_function(
         "Bun.serve",
@@ -1010,7 +996,6 @@ fn add_bun(registry: &mut LibraryRegistry) {
         )
         .with_effects(FunctionEffects {
             executes_user_code: true,
-            writes_ambient_state: true,
             ..FunctionEffects::default()
         }),
     );
@@ -1041,7 +1026,10 @@ fn add_bun(registry: &mut LibraryRegistry) {
             primitive_type("void"),
         )
         .with_receiver(named_type("Bun.Server"))
-        .with_effects(ambient_effects()),
+        .with_effects(FunctionEffects {
+            invalidates_heap_facts: true,
+            ..FunctionEffects::default()
+        }),
     );
 
     registry.add_module_export(
@@ -1256,21 +1244,6 @@ fn callback_effects(parameter_index: usize, timing: CallbackTiming) -> FunctionE
             parameter_index,
             timing,
         }],
-        executes_user_code: false,
-        writes_ambient_state: timing == CallbackTiming::Deferred,
-    }
-}
-
-fn ambient_read_effects() -> FunctionEffects {
-    FunctionEffects {
-        writes_ambient_state: false,
-        ..FunctionEffects::default()
-    }
-}
-
-fn ambient_effects() -> FunctionEffects {
-    FunctionEffects {
-        writes_ambient_state: true,
         ..FunctionEffects::default()
     }
 }

@@ -70,7 +70,9 @@ pub struct FunctionEffects {
     /// The host call can synchronously re-enter arbitrary user code without
     /// receiving that code as an explicit callback parameter.
     pub executes_user_code: bool,
-    pub writes_ambient_state: bool,
+    /// The call can invalidate refinement facts about otherwise unrelated
+    /// heap objects.
+    pub invalidates_heap_facts: bool,
 }
 
 impl Default for FunctionEffects {
@@ -79,7 +81,7 @@ impl Default for FunctionEffects {
             receiver: ReceiverEffect::None,
             callbacks: Vec::new(),
             executes_user_code: false,
-            writes_ambient_state: false,
+            invalidates_heap_facts: false,
         }
     }
 }

@@ -183,6 +183,16 @@ fn runtime_catalogs_are_isolated_and_modules_support_aliases_and_overloads() {
             .effects
             .executes_user_code
     );
+    assert!(
+        !bun.static_function("Bun.serve").unwrap()[0]
+            .effects
+            .invalidates_heap_facts
+    );
+    assert!(
+        bun.receiver_method("Bun.Server", "stop").unwrap()[0]
+            .effects
+            .invalidates_heap_facts
+    );
     assert_eq!(
         bun.static_function("Bun.serve").unwrap()[0].parameters[0]
             .ty

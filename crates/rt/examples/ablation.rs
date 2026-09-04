@@ -191,6 +191,12 @@ fn main() -> Result<(), String> {
         baseline_features.without(RtAblation::AbstractPredicateCongruence),
         rounds,
     );
+    let no_heap_fact_invalidation = evaluate(
+        "no-heap-fact-invalidation",
+        &cases,
+        baseline_features.without(RtAblation::HeapFactInvalidation),
+        rounds,
+    );
 
     println!(
         "cases: {} (Flux + prelude; parsed without Corsa)",
@@ -205,6 +211,7 @@ fn main() -> Result<(), String> {
         &baseline,
         &no_int_conversion_axioms,
         &no_abstract_predicate_congruence,
+        &no_heap_fact_invalidation,
     ] {
         println!(
             "| {} | {} | {} | {} | {} | {:.3} |",
@@ -216,7 +223,11 @@ fn main() -> Result<(), String> {
             run.median.as_secs_f64() * 1000.0,
         );
     }
-    for run in [&no_int_conversion_axioms, &no_abstract_predicate_congruence] {
+    for run in [
+        &no_int_conversion_axioms,
+        &no_abstract_predicate_congruence,
+        &no_heap_fact_invalidation,
+    ] {
         report_delta(&baseline, run, &cases);
     }
     Ok(())

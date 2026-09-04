@@ -184,6 +184,7 @@ struct RefinementConstraint<'a> {
 pub enum RtAblation {
     IntConversionAxioms,
     AbstractPredicateCongruence,
+    HeapFactInvalidation,
 }
 
 /// Verifier configuration. The default retains the production behavior.
@@ -191,6 +192,7 @@ pub enum RtAblation {
 pub struct RtFeatures {
     pub int_conversion_axioms: bool,
     pub abstract_predicate_congruence: bool,
+    pub heap_fact_invalidation: bool,
 }
 
 impl RtFeatures {
@@ -200,6 +202,7 @@ impl RtFeatures {
             RtAblation::AbstractPredicateCongruence => {
                 self.abstract_predicate_congruence = false;
             }
+            RtAblation::HeapFactInvalidation => self.heap_fact_invalidation = false,
         }
         self
     }
@@ -210,6 +213,7 @@ impl Default for RtFeatures {
         Self {
             int_conversion_axioms: true,
             abstract_predicate_congruence: true,
+            heap_fact_invalidation: true,
         }
     }
 }
@@ -3668,8 +3672,7 @@ impl Verifier<'_> {
         // receiver length from before the inner call.
         let old_length = receiver.as_ref().and_then(|receiver| {
             let needs_snapshot = signature.effects.receiver == ReceiverEffect::Mutate
-                || !signature.effects.callbacks.is_empty()
-                || signature.effects.writes_ambient_state;
+                || !signature.effects.callbacks.is_empty();
             needs_snapshot.then(|| {
                 let member = collection_length(&receiver.term);
                 let snapshot = Term::Var(self.fresh_name("old_length"), Sort::Int);
@@ -3677,6 +3680,12 @@ impl Verifier<'_> {
                 snapshot
             })
         });
+        // This is a call-wide effect, not a receiver-length postcondition.
+        // Keep it explicit instead of smuggling invalidation through a dummy
+        // receiver snapshot.
+        if self.features.heap_fact_invalidation && signature.effects.invalidates_heap_facts {
+            invalidate_heap_facts(state);
+        }
         let invokes_unmodeled_callback = signature.effects.callbacks.iter().any(|callback| {
             call.arguments
                 .get(callback.parameter_index)
@@ -7011,6 +7020,7 @@ mod ablation_tests {
         let features = RtFeatures::default();
         assert!(features.int_conversion_axioms);
         assert!(features.abstract_predicate_congruence);
+        assert!(features.heap_fact_invalidation);
     }
 
     #[test]

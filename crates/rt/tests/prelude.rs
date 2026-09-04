@@ -1,4 +1,9 @@
-use pragma_rt::{checker, parser, prelude::Environment, runtime, transpiler};
+use pragma_rt::{
+    checker, parser,
+    prelude::Environment,
+    runtime, transpiler,
+    verifier::{RtAblation, RtFeatures},
+};
 use std::{
     collections::BTreeSet,
     fs,
@@ -59,6 +64,39 @@ fn assert_fixture_rejected_with(relative: &str, environment: Environment, expect
             .iter()
             .all(|error| !error.message.contains("Z3 returned unknown")),
         "{relative} was rejected because the solver returned unknown:\n{diagnostics}"
+    );
+}
+
+#[test]
+fn bun_stop_heap_invalidation_has_an_ablation_witness() {
+    let relative = "bun/bun_stop_heap_effect_negative.js";
+    let path = fixture_path(relative);
+    let file_name = path.display().to_string();
+    let (source, annotations) = parse_fixture(relative);
+    let baseline = checker::check_source_with_environment_and_features(
+        &source,
+        &file_name,
+        &annotations,
+        Environment::Bun,
+        RtFeatures::default(),
+    );
+    assert!(
+        diagnostics(&baseline).contains("requires a non-empty dense array"),
+        "expected stop() to invalidate the prior dense-array length fact, got:\n{}",
+        diagnostics(&baseline)
+    );
+
+    let ablated = checker::check_source_with_environment_and_features(
+        &source,
+        &file_name,
+        &annotations,
+        Environment::Bun,
+        RtFeatures::default().without(RtAblation::HeapFactInvalidation),
+    );
+    assert!(
+        ablated.is_empty(),
+        "heap-invalidation ablation should expose the witness, got:\n{}",
+        diagnostics(&ablated)
     );
 }
 
