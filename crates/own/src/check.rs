@@ -124,7 +124,6 @@ pub fn check_program_with_payloads_and_features(
     let prelude_sigs = crate::prelude::signatures(runtime);
     let mut file = FileCtx {
         path: path.to_string(),
-        source,
         annots,
         sigs: prelude_sigs.clone(),
         scoped_sigs: HashMap::new(),
@@ -366,8 +365,6 @@ fn ident_span(pat: &BindingPattern<'_>) -> Option<u32> {
 
 struct FileCtx<'a> {
     path: String,
-    #[allow(dead_code)]
-    source: &'a str,
     annots: HashMap<u32, Vec<AttachedOwn>>,
     sigs: HashMap<String, FnSig>,
     scoped_sigs: HashMap<u32, HashMap<String, FnSig>>,
