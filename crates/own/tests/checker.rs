@@ -1874,6 +1874,144 @@ function main() {
 }
 
 #[test]
+fn owned_object_and_array_aggregates_are_exactly_once() {
+    for initializer in ["{ resource }", "[resource]", "{ nested: [resource] }"] {
+        let src = format!(
+            r#"
+/*#own type: (resource: unique Resource) => void */
+function store(resource) {{
+  const container = {initializer};
+  void container;
+}}
+"#
+        );
+        let result = check_source("test.js", &src);
+        assert!(
+            result.kinds().contains(&RuleKind::UniqueForget),
+            "forgotten owned aggregate `{initializer}` must reject: {:?}",
+            result.formatted_lines()
+        );
+    }
+}
+
+#[test]
+fn aggregate_owner_requires_a_value_preserving_position() {
+    let call_value = r#"
+/*#own type: (resource: unique Resource) => void */
+function consumeResource(resource) { void resource; }
+
+/*#own type: (resource: unique Resource) => void */
+function store(resource) {
+  const container = { used: consumeResource(resource) };
+  void container;
+}
+"#;
+    let call_result = check_source("test.js", call_value);
+    assert!(
+        call_result.diagnostics.is_empty(),
+        "a consumed call argument is not stored in the aggregate: {:?}",
+        call_result.formatted_lines()
+    );
+
+    let computed_key = r#"
+/*#own type: (resource: unique Resource) => void */
+function store(resource) {
+  const container = { [resource]: 1 };
+  void container;
+}
+"#;
+    let key_result = check_source("test.js", computed_key);
+    assert!(
+        key_result.diagnostics.is_empty(),
+        "a consumed computed key is not stored in the aggregate: {:?}",
+        key_result.formatted_lines()
+    );
+}
+
+#[test]
+fn owned_call_inside_aggregate_is_not_hidden_by_an_identifier_transfer() {
+    let src = r#"
+/*#own type: () => unique Resource */
+function make() { return {}; }
+/*#own type: (container: unique Aggregate) => void */
+function consumeAggregate(container) { void container; }
+
+/*#own type: (resource: unique Resource) => void */
+function store(resource) {
+  const container = { resource, produced: make() };
+  consumeAggregate(container);
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.kinds().contains(&RuleKind::UniqueForget),
+        "an untracked owned call result inside an aggregate must still reject: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn owned_aggregate_can_be_consumed_as_a_whole() {
+    let src = r#"
+/*#own type: (container: unique Aggregate) => void */
+function consumeAggregate(container) { void container; }
+
+/*#own type: (left: unique Resource, right: unique Resource) => void */
+function store(left, right) {
+  const container = { left, nested: [right] };
+  consumeAggregate(container);
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "whole-aggregate consumption must transfer every stored owner: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn owned_aggregate_can_move_between_bindings() {
+    let src = r#"
+/*#own type: (container: unique Aggregate) => void */
+function consumeAggregate(container) { void container; }
+
+/*#own type: (resource: unique Resource) => void */
+function store(resource) {
+  const first = { resource };
+  const second = first;
+  consumeAggregate(second);
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.diagnostics.is_empty(),
+        "moving an opaque aggregate must transfer its ownership marker: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
+fn owned_aggregate_member_access_does_not_discharge_the_container() {
+    let src = r#"
+/*#own type: (resource: unique Resource) => void */
+function consumeResource(resource) { void resource; }
+
+/*#own type: (resource: unique Resource) => void */
+function store(resource) {
+  const container = { resource };
+  consumeResource(container.resource);
+}
+"#;
+    let result = check_source("test.js", src);
+    assert!(
+        result.kinds().contains(&RuleKind::UniqueForget),
+        "member access needs path ownership and must not silently consume the aggregate: {:?}",
+        result.formatted_lines()
+    );
+}
+
+#[test]
 fn class_field_and_spread_and_computed_key_unique_forget() {
     let src_field = r#"
 class C {

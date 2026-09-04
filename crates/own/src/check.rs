@@ -2469,6 +2469,7 @@ struct VarEntry {
     read_borrows: u32,
     write_borrows: u32,
     ty_name: String,
+    opaque_aggregate: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2681,6 +2682,7 @@ impl Checker<'_> {
                 read_borrows: 0,
                 write_borrows: 0,
                 ty_name,
+                opaque_aggregate: false,
             },
         );
     }
@@ -3309,6 +3311,7 @@ impl Checker<'_> {
                 read_borrows: 0,
                 write_borrows: 0,
                 ty_name: entry.ty_name.clone(),
+                opaque_aggregate: entry.opaque_aggregate,
             },
         );
     }
@@ -3356,6 +3359,7 @@ impl Checker<'_> {
                 read_borrows: 0,
                 write_borrows: 0,
                 ty_name,
+                opaque_aggregate: false,
             },
         );
     }
@@ -3364,6 +3368,84 @@ impl Checker<'_> {
         let mut apps = Apps::default();
         apps.consumed = 1;
         self.apply_apps(name, apps, span);
+    }
+
+    /// Infer an opaque owner for an object/array literal that directly stores
+    /// owned values. The container can move as a whole; member paths remain
+    /// non-consuming, so extracting a field cannot silently discharge the
+    /// container without path-sensitive ownership support.
+    fn aggregate_transfer(&self, expr: &Expression<'_>) -> Option<(Vec<String>, OwnKind)> {
+        let mut sources = Vec::new();
+        if !self.collect_aggregate_sources(expr, &mut sources) || sources.is_empty() {
+            return None;
+        }
+
+        let mut seen = HashSet::new();
+        if sources.iter().any(|source| !seen.insert(source.clone())) {
+            // Let ordinary expression checking report the repeated move; no
+            // owner is created for a transfer that did not succeed.
+            return None;
+        }
+
+        let mut kind = OwnKind::Affine;
+        for source in &sources {
+            let entry = self.tbl.get(source)?;
+            if entry.state != VarState::Unconsumed
+                || !matches!(entry.kind, OwnKind::Unique | OwnKind::Affine)
+            {
+                return None;
+            }
+            if entry.kind == OwnKind::Unique {
+                kind = OwnKind::Unique;
+            }
+        }
+        Some((sources, kind))
+    }
+
+    fn collect_aggregate_sources(&self, expr: &Expression<'_>, out: &mut Vec<String>) -> bool {
+        match peel(expr) {
+            Expression::ArrayExpression(array) => {
+                for element in &array.elements {
+                    match element {
+                        oxc::ast::ast::ArrayExpressionElement::SpreadElement(_) => {}
+                        other => {
+                            if let Some(value) = other.as_expression() {
+                                self.collect_aggregate_value_sources(value, out);
+                            }
+                        }
+                    }
+                }
+                true
+            }
+            Expression::ObjectExpression(object) => {
+                for property in &object.properties {
+                    if let oxc::ast::ast::ObjectPropertyKind::ObjectProperty(property) = property {
+                        self.collect_aggregate_value_sources(&property.value, out);
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn collect_aggregate_value_sources(&self, expr: &Expression<'_>, out: &mut Vec<String>) {
+        match peel(expr) {
+            Expression::Identifier(identifier) => {
+                let name = identifier.name.as_str();
+                if self
+                    .tbl
+                    .get(name)
+                    .is_some_and(|entry| matches!(entry.kind, OwnKind::Unique | OwnKind::Affine))
+                {
+                    out.push(name.to_string());
+                }
+            }
+            Expression::ArrayExpression(_) | Expression::ObjectExpression(_) => {
+                self.collect_aggregate_sources(expr, out);
+            }
+            _ => {}
+        }
     }
 
     fn check_var_decl(&mut self, decl: &VariableDeclaration<'_>, extra: Option<u32>) {
@@ -3445,6 +3527,7 @@ impl Checker<'_> {
                 let src_kind = src_name
                     .as_ref()
                     .and_then(|n| self.tbl.get(n).map(|e| e.kind));
+                let aggregate_transfer = self.aggregate_transfer(init);
                 self.check_expr(init, init.span().start);
                 self.discard_sequence_prefix(init);
                 if let Some(n) = &name {
@@ -3460,6 +3543,10 @@ impl Checker<'_> {
                                 .as_ref()
                                 .and_then(|s| self.tbl.get(s).map(|e| e.ty_name.clone()))
                                 .unwrap_or_default();
+                            let opaque_aggregate = src_name
+                                .as_ref()
+                                .and_then(|s| self.tbl.get(s).map(|e| e.opaque_aggregate))
+                                .unwrap_or(false);
                             self.add_var(
                                 n.clone(),
                                 VarEntry {
@@ -3471,6 +3558,7 @@ impl Checker<'_> {
                                     read_borrows: 0,
                                     write_borrows: 0,
                                     ty_name,
+                                    opaque_aggregate,
                                 },
                             );
                             continue;
@@ -3491,6 +3579,33 @@ impl Checker<'_> {
                         self.add_from_type(n, &ret, d.span.start);
                         if matches!(ret, OwnType::Unique(_) | OwnType::Affine(_)) {
                             self.check_call_subexprs(init);
+                            continue;
+                        }
+                    }
+                    if let Some((sources, kind)) = aggregate_transfer {
+                        let transferred = sources.iter().all(|source| {
+                            matches!(self.tbl.get(source), Some(entry) if entry.state == VarState::Consumed)
+                        });
+                        if transferred {
+                            self.add_var(
+                                n.clone(),
+                                VarEntry {
+                                    kind,
+                                    state: VarState::Unconsumed,
+                                    loop_depth: self.loop_depth,
+                                    defined_at: d.span.start,
+                                    owner: None,
+                                    read_borrows: 0,
+                                    write_borrows: 0,
+                                    ty_name: String::new(),
+                                    opaque_aggregate: true,
+                                },
+                            );
+                            // Calls that produce additional owned values are
+                            // not table entries yet. Keep rejecting those as
+                            // discarded rather than silently hiding them in
+                            // this coarse aggregate abstraction.
+                            self.check_discard(init);
                             continue;
                         }
                     }
@@ -5243,6 +5358,15 @@ impl Checker<'_> {
             Expression::AssignmentExpression(a) => self
                 .count(&a.right, name)
                 .merge(self.count_assignment_target(&a.left, name)),
+            Expression::UnaryExpression(u)
+                if matches!(u.operator, UnaryOperator::Void)
+                    && self
+                        .tbl
+                        .get(name)
+                        .is_some_and(|entry| entry.opaque_aggregate) =>
+            {
+                self.as_non_consuming(self.count(&u.argument, name))
+            }
             Expression::UnaryExpression(u) => self.count(&u.argument, name),
             Expression::PrivateInExpression(p) => self.count(&p.right, name),
             Expression::UpdateExpression(u) => match &u.argument {
