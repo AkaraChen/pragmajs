@@ -31,8 +31,37 @@ pub enum CompilerMode {
     On(CompilerOptions),
 }
 
+/// Select which checker participates in a run.
+///
+/// `All` preserves the original combined-check behavior. The single-checker
+/// variants are useful as an ablation axis and do not invoke the other
+/// checker, including its annotation parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckerSelection {
+    All,
+    Own,
+    Rt,
+}
+
+impl CheckerSelection {
+    const fn includes_own(self) -> bool {
+        matches!(self, Self::All | Self::Own)
+    }
+
+    const fn includes_rt(self) -> bool {
+        matches!(self, Self::All | Self::Rt)
+    }
+}
+
+impl Default for CheckerSelection {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckOptions {
+    pub checker: CheckerSelection,
     pub runtime: Runtime,
     pub environment: Environment,
     pub compiler: CompilerMode,
@@ -41,6 +70,7 @@ pub struct CheckOptions {
 impl Default for CheckOptions {
     fn default() -> Self {
         Self {
+            checker: CheckerSelection::All,
             runtime: Runtime::default(),
             environment: Environment::Auto,
             compiler: CompilerMode::Auto,
@@ -136,23 +166,33 @@ pub fn check_parsed(
     parsed: &Parsed<'_>,
     options: &CheckOptions,
 ) -> Result<CombinedCheck, CombinedError> {
-    let (rt_annotations, mut rt) =
+    let (rt_annotations, mut rt) = if options.checker.includes_rt() {
         match pragma_rt::parser::annotations_from_program(source, filename, &parsed.program) {
             Ok(result) => (result.annotations, Vec::new()),
             Err(message) => (Vec::new(), vec![RtError { message, loc: None }]),
-        };
+        }
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let own_offsets = if options.checker.includes_own() {
+        omitted_payload_offsets(filename, source, &parsed.program)
+    } else {
+        Vec::new()
+    };
+    let compiler_required =
+        should_resolve_compiler(options.checker, &own_offsets, &options.compiler);
 
-    let own;
+    let mut own = CheckResult::default();
     if rt.is_empty() {
-        if let Some(resolved) = compiler_for_file(filename, &options.compiler)? {
+        let compiler = if compiler_required {
+            compiler_for_file(filename, &options.compiler)?
+        } else {
+            None
+        };
+        if let Some(resolved) = compiler {
             let provider = CorsaTypeProvider::new(resolved.corsa_path, resolved.working_directory);
-            let mut extra: Vec<usize> = omitted_payload_offsets(filename, source, &parsed.program)
-                .into_iter()
-                .map(|offset| offset as usize)
-                .collect();
-            extra.extend(pragma_rt::parser::omitted_query_offsets(&rt_annotations));
-            extra.sort();
-            extra.dedup();
+            let rt_offsets = pragma_rt::parser::omitted_query_offsets(&rt_annotations);
+            let extra = selected_compiler_offsets(options.checker, &own_offsets, &rt_offsets);
             let hints = pragma_rt::compiler_hints::analyze_program_with_offsets(
                 &provider,
                 source,
@@ -162,41 +202,49 @@ pub fn check_parsed(
                 &extra,
             )
             .map_err(CombinedError::Compiler)?;
-            let mut payloads = HashMap::new();
-            for offset in omitted_payload_offsets(filename, source, &parsed.program) {
-                if let Some(rendered) = hints.rendered_at(offset as usize) {
-                    if let Some(name) = own_payload_name(rendered) {
-                        payloads.insert(offset, name);
+            if options.checker.includes_own() {
+                let mut payloads = HashMap::new();
+                for offset in own_offsets {
+                    if let Some(rendered) = hints.rendered_at(offset as usize) {
+                        if let Some(name) = own_payload_name(rendered) {
+                            payloads.insert(offset, name);
+                        }
                     }
                 }
+                own = check_parsed_with_payloads(
+                    filename,
+                    source,
+                    &parsed.program,
+                    options.runtime,
+                    Some(&payloads),
+                );
             }
-            own = check_parsed_with_payloads(
-                filename,
-                source,
-                &parsed.program,
-                options.runtime,
-                Some(&payloads),
-            );
-            rt = pragma_rt::checker::check_program_with_hints(
-                source,
-                filename,
-                &parsed.program,
-                &rt_annotations,
-                options.environment,
-                &resolved.source_path,
-                &hints,
-            );
+            if options.checker.includes_rt() {
+                rt = pragma_rt::checker::check_program_with_hints(
+                    source,
+                    filename,
+                    &parsed.program,
+                    &rt_annotations,
+                    options.environment,
+                    &resolved.source_path,
+                    &hints,
+                );
+            }
         } else {
-            own = check_parsed_with(filename, source, &parsed.program, options.runtime);
-            rt = pragma_rt::checker::check_program_with_environment(
-                source,
-                filename,
-                &parsed.program,
-                &rt_annotations,
-                options.environment,
-            );
+            if options.checker.includes_own() {
+                own = check_parsed_with(filename, source, &parsed.program, options.runtime);
+            }
+            if options.checker.includes_rt() {
+                rt = pragma_rt::checker::check_program_with_environment(
+                    source,
+                    filename,
+                    &parsed.program,
+                    &rt_annotations,
+                    options.environment,
+                );
+            }
         }
-    } else {
+    } else if options.checker.includes_own() {
         own = check_parsed_with(filename, source, &parsed.program, options.runtime);
     }
 
@@ -207,6 +255,31 @@ pub fn check_parsed(
         rt,
         rt_annotations,
     })
+}
+
+fn selected_compiler_offsets(
+    checker: CheckerSelection,
+    own_offsets: &[u32],
+    rt_offsets: &[usize],
+) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    if checker.includes_own() {
+        offsets.extend(own_offsets.iter().map(|&offset| offset as usize));
+    }
+    if checker.includes_rt() {
+        offsets.extend_from_slice(rt_offsets);
+    }
+    offsets.sort();
+    offsets.dedup();
+    offsets
+}
+
+fn should_resolve_compiler(
+    checker: CheckerSelection,
+    own_offsets: &[u32],
+    compiler: &CompilerMode,
+) -> bool {
+    checker.includes_rt() || !own_offsets.is_empty() || matches!(compiler, CompilerMode::On(_))
 }
 
 /// Parse once, then [`check_parsed`].
@@ -243,7 +316,11 @@ pub fn emit_source(
         &mut parsed.program,
         &check.rt_annotations,
     );
-    let code = format!("{}\n\n{}", pragma_rt::runtime::runtime_block(), transformed);
+    let code = if options.checker.includes_rt() {
+        format!("{}\n\n{}", pragma_rt::runtime::runtime_block(), transformed)
+    } else {
+        transformed
+    };
     Ok(EmitResult {
         check,
         code: Some(code),
@@ -402,6 +479,7 @@ fn json_string(value: &str) -> String {
 
 const TARGET_VALUES: &str = "auto, ecmascript, browser, node, deno, bun";
 const RUNTIME_VALUES: &str = "node, bun, deno, none";
+const CHECKER_VALUES: &str = "all, own, rt";
 
 pub fn parse_args(args: &[String]) -> Result<Command, String> {
     if args.is_empty() {
@@ -420,7 +498,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             let (options, positional) = parse_options(rest)?;
             if positional.is_empty() {
                 return Err(format!(
-                    "Usage: pragmajs check [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>..."
+                    "Usage: pragmajs check [--checker <{CHECKER_VALUES}>] [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>..."
                 ));
             }
             Ok(Command::Check {
@@ -432,7 +510,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             let (options, positional) = parse_options(rest)?;
             if positional.len() != 2 {
                 return Err(format!(
-                    "Usage: pragmajs build [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>"
+                    "Usage: pragmajs build [--checker <{CHECKER_VALUES}>] [--runtime <{RUNTIME_VALUES}>] [--target <{TARGET_VALUES}>] [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>"
                 ));
             }
             Ok(Command::Build {
@@ -446,10 +524,12 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
 }
 
 fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String> {
+    let mut checker = CheckerSelection::All;
     let mut runtime = Runtime::default();
     let mut environment = Environment::Auto;
     let mut target_seen = false;
     let mut runtime_seen = false;
+    let mut checker_seen = false;
     let mut corsa_path = None;
     let mut tsconfig_path = None;
     let mut corsa_off = false;
@@ -458,6 +538,28 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
 
     while index < args.len() {
         let argument = &args[index];
+
+        let checker_value = if argument == "--checker" {
+            index += 1;
+            Some(
+                args.get(index)
+                    .ok_or_else(|| {
+                        format!("Missing value for '--checker'. Expected one of: {CHECKER_VALUES}.")
+                    })?
+                    .as_str(),
+            )
+        } else {
+            argument.strip_prefix("--checker=")
+        };
+        if let Some(value) = checker_value {
+            if checker_seen {
+                return Err("Checker specified more than once.".to_string());
+            }
+            checker = parse_checker(value)?;
+            checker_seen = true;
+            index += 1;
+            continue;
+        }
 
         let runtime_value = if argument == "--runtime" || argument == "-r" {
             index += 1;
@@ -578,12 +680,24 @@ fn parse_options(args: &[String]) -> Result<(CheckOptions, Vec<String>), String>
 
     Ok((
         CheckOptions {
+            checker,
             runtime,
             environment,
             compiler,
         },
         positional,
     ))
+}
+
+fn parse_checker(value: &str) -> Result<CheckerSelection, String> {
+    match value {
+        "all" => Ok(CheckerSelection::All),
+        "own" => Ok(CheckerSelection::Own),
+        "rt" => Ok(CheckerSelection::Rt),
+        _ => Err(format!(
+            "Unknown checker '{value}'. Expected one of: {CHECKER_VALUES}."
+        )),
+    }
 }
 
 fn parse_target(value: &str) -> Result<Environment, String> {
@@ -633,10 +747,11 @@ fn is_js_ts(path: &Path) -> bool {
 pub fn help_text() -> &'static str {
     "pragmajs — parse once, then run /*#own and /*#rt checks\n\n\
      Usage:\n\
-         pragmajs check [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
+         pragmajs check [--checker all|own|rt] [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
                  [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <file-or-dir>...\n\
-         pragmajs build [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
+         pragmajs build [--checker all|own|rt] [--runtime node|bun|deno|none] [--target auto|ecmascript|browser|node|deno|bun]\n\
                  [--corsa <executable>] [--tsconfig <file>] [--no-corsa] <input> <output>\n\n\
+     --checker       Checker selection: all (default), own, or rt\n\
      --runtime, -r   Ownership prelude: node (default), bun, deno, or none\n\
      --target        Refinement prelude: auto (default), ecmascript, browser, node, deno, bun\n\
      --corsa         Corsa executable (default: bundled tsgo, else CORSA_BIN / PATH)\n\
@@ -678,6 +793,116 @@ mod tests {
     }
 
     #[test]
+    fn checker_selection_defaults_to_all_and_parses_explicit_values() {
+        assert_eq!(
+            parse_args(&args(&["check", "input.js"])),
+            Ok(Command::Check {
+                paths: vec![PathBuf::from("input.js")],
+                options: CheckOptions::default(),
+            })
+        );
+        for (value, checker) in [
+            ("all", CheckerSelection::All),
+            ("own", CheckerSelection::Own),
+            ("rt", CheckerSelection::Rt),
+        ] {
+            assert_eq!(
+                parse_args(&args(&["check", "--checker", value, "input.js"])),
+                Ok(Command::Check {
+                    paths: vec![PathBuf::from("input.js")],
+                    options: CheckOptions {
+                        checker,
+                        ..CheckOptions::default()
+                    },
+                })
+            );
+            assert_eq!(
+                parse_args(&args(&[
+                    "build",
+                    "input.js",
+                    "output.js",
+                    &format!("--checker={value}"),
+                ])),
+                Ok(Command::Build {
+                    input_path: "input.js".to_string(),
+                    output_path: "output.js".to_string(),
+                    options: CheckOptions {
+                        checker,
+                        ..CheckOptions::default()
+                    },
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn checker_selection_rejects_missing_unknown_and_duplicate_values() {
+        assert_eq!(
+            parse_args(&args(&["check", "input.js", "--checker"])),
+            Err("Missing value for '--checker'. Expected one of: all, own, rt.".to_string())
+        );
+        assert_eq!(
+            parse_args(&args(&["check", "--checker", "both", "input.js"])),
+            Err("Unknown checker 'both'. Expected one of: all, own, rt.".to_string())
+        );
+        assert_eq!(
+            parse_args(&args(&[
+                "check",
+                "--checker=own",
+                "--checker",
+                "rt",
+                "input.js",
+            ])),
+            Err("Checker specified more than once.".to_string())
+        );
+    }
+
+    #[test]
+    fn compiler_offsets_only_include_selected_checkers() {
+        let own_offsets = [30, 10];
+        let rt_offsets = [20, 10];
+        assert_eq!(
+            selected_compiler_offsets(CheckerSelection::All, &own_offsets, &rt_offsets),
+            vec![10, 20, 30]
+        );
+        assert_eq!(
+            selected_compiler_offsets(CheckerSelection::Own, &own_offsets, &rt_offsets),
+            vec![10, 30]
+        );
+        assert_eq!(
+            selected_compiler_offsets(CheckerSelection::Rt, &own_offsets, &rt_offsets),
+            vec![10, 20]
+        );
+    }
+
+    #[test]
+    fn compiler_resolution_respects_selection_sparse_evidence_and_explicit_on() {
+        assert!(!should_resolve_compiler(
+            CheckerSelection::Own,
+            &[],
+            &CompilerMode::Auto
+        ));
+        assert!(should_resolve_compiler(
+            CheckerSelection::Own,
+            &[10],
+            &CompilerMode::Auto
+        ));
+        assert!(should_resolve_compiler(
+            CheckerSelection::Rt,
+            &[],
+            &CompilerMode::Auto
+        ));
+        assert!(should_resolve_compiler(
+            CheckerSelection::Own,
+            &[],
+            &CompilerMode::On(CompilerOptions {
+                corsa_path: None,
+                tsconfig_path: None,
+            })
+        ));
+    }
+
+    #[test]
     fn runtime_and_target_can_precede_or_follow() {
         assert_eq!(
             parse_args(&args(&[
@@ -691,6 +916,7 @@ mod tests {
             Ok(Command::Check {
                 paths: vec![PathBuf::from("input.js")],
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::Bun,
                     environment: Environment::Node,
                     compiler: CompilerMode::Auto,
@@ -709,6 +935,7 @@ mod tests {
                 input_path: "input.js".to_string(),
                 output_path: "output.js".to_string(),
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::None,
                     environment: Environment::Bun,
                     compiler: CompilerMode::Auto,
@@ -720,11 +947,11 @@ mod tests {
     #[test]
     fn compiler_defaults_to_auto() {
         assert_eq!(
-            parse_args(&args(&["check", "input.js"]))
-                .unwrap(),
+            parse_args(&args(&["check", "input.js"])).unwrap(),
             Command::Check {
                 paths: vec![PathBuf::from("input.js")],
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::default(),
                     environment: Environment::Auto,
                     compiler: CompilerMode::Auto,
@@ -740,6 +967,7 @@ mod tests {
             Command::Check {
                 paths: vec![PathBuf::from("input.js")],
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::default(),
                     environment: Environment::Auto,
                     compiler: CompilerMode::Off,
@@ -761,6 +989,7 @@ mod tests {
             Ok(Command::Check {
                 paths: vec![PathBuf::from("input.js")],
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::default(),
                     environment: Environment::Auto,
                     compiler: CompilerMode::On(CompilerOptions {
@@ -775,6 +1004,7 @@ mod tests {
             Ok(Command::Check {
                 paths: vec![PathBuf::from("input.js")],
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::default(),
                     environment: Environment::Auto,
                     compiler: CompilerMode::On(CompilerOptions {
@@ -794,6 +1024,7 @@ mod tests {
             Ok(Command::Check {
                 paths: vec![PathBuf::from("input.js")],
                 options: CheckOptions {
+                    checker: CheckerSelection::All,
                     runtime: Runtime::default(),
                     environment: Environment::Auto,
                     compiler: CompilerMode::On(CompilerOptions {
@@ -825,8 +1056,8 @@ mod tests {
 
     #[test]
     fn finds_nearest_tsconfig_from_source() {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../rt/fixtures/compiler/project/entry.js");
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../rt/fixtures/compiler/project/entry.js");
         let found = find_tsconfig(&source).expect("tsconfig next to fixture");
         assert!(
             found.ends_with("compiler/project/tsconfig.json"),

@@ -20,11 +20,143 @@ use std::path::{Path, PathBuf};
 
 pub use annot::{BorrowMode, FnSig, OwnDirective, OwnType};
 pub use check::{
-    check_program, check_program_with_payloads, omitted_payload_offsets, own_payload_name,
+    check_program, check_program_with_features, check_program_with_payloads,
+    check_program_with_payloads_and_features, omitted_payload_offsets, own_payload_name,
     PayloadNames,
 };
 pub use pragma_loc::offset_to_line_col;
 pub use prelude::Runtime;
+
+/// One semantic or engineering assumption that can be removed in an ablation run.
+///
+/// These switches alter the checker path itself. They are intentionally separate
+/// from filtering diagnostics after checking, which would leave the state machine
+/// intact and produce misleading experiments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OwnAblation {
+    FunctionContracts,
+    MoveTracking,
+    ExactOnce,
+    AffineKind,
+    BorrowModel,
+    LocalDirectives,
+    LocalCalleeContracts,
+    OwnedReturnPropagation,
+    InstanceDispatch,
+    ControlFlowSplitting,
+    LoopDepth,
+    NonConsumingPaths,
+    UnknownCallConservatism,
+    UnmappedGuards,
+}
+
+impl OwnAblation {
+    pub const ALL: [Self; 14] = [
+        Self::FunctionContracts,
+        Self::MoveTracking,
+        Self::ExactOnce,
+        Self::AffineKind,
+        Self::BorrowModel,
+        Self::LocalDirectives,
+        Self::LocalCalleeContracts,
+        Self::OwnedReturnPropagation,
+        Self::InstanceDispatch,
+        Self::ControlFlowSplitting,
+        Self::LoopDepth,
+        Self::NonConsumingPaths,
+        Self::UnknownCallConservatism,
+        Self::UnmappedGuards,
+    ];
+
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::FunctionContracts => "function-contracts",
+            Self::MoveTracking => "move-tracking",
+            Self::ExactOnce => "exact-once",
+            Self::AffineKind => "affine-kind",
+            Self::BorrowModel => "borrow-model",
+            Self::LocalDirectives => "local-directives",
+            Self::LocalCalleeContracts => "local-callee-contracts",
+            Self::OwnedReturnPropagation => "owned-return-propagation",
+            Self::InstanceDispatch => "instance-dispatch",
+            Self::ControlFlowSplitting => "control-flow-splitting",
+            Self::LoopDepth => "loop-depth",
+            Self::NonConsumingPaths => "non-consuming-paths",
+            Self::UnknownCallConservatism => "unknown-call-conservatism",
+            Self::UnmappedGuards => "unmapped-guards",
+        }
+    }
+}
+
+/// Semantic features used by the ownership checker.
+///
+/// Production entry points use [`OwnFeatures::default`] (everything enabled).
+/// [`OwnFeatures::without`] creates a one-factor-at-a-time experimental variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnFeatures {
+    pub function_contracts: bool,
+    pub move_tracking: bool,
+    pub exact_once: bool,
+    pub affine_kind: bool,
+    pub borrow_model: bool,
+    pub local_directives: bool,
+    pub local_callee_contracts: bool,
+    pub owned_return_propagation: bool,
+    pub instance_dispatch: bool,
+    pub control_flow_splitting: bool,
+    pub loop_depth: bool,
+    pub non_consuming_paths: bool,
+    pub unknown_call_conservatism: bool,
+    pub unmapped_guards: bool,
+}
+
+impl OwnFeatures {
+    pub const fn all() -> Self {
+        Self {
+            function_contracts: true,
+            move_tracking: true,
+            exact_once: true,
+            affine_kind: true,
+            borrow_model: true,
+            local_directives: true,
+            local_callee_contracts: true,
+            owned_return_propagation: true,
+            instance_dispatch: true,
+            control_flow_splitting: true,
+            loop_depth: true,
+            non_consuming_paths: true,
+            unknown_call_conservatism: true,
+            unmapped_guards: true,
+        }
+    }
+
+    pub const fn without(ablation: OwnAblation) -> Self {
+        let mut features = Self::all();
+        match ablation {
+            OwnAblation::FunctionContracts => features.function_contracts = false,
+            OwnAblation::MoveTracking => features.move_tracking = false,
+            OwnAblation::ExactOnce => features.exact_once = false,
+            OwnAblation::AffineKind => features.affine_kind = false,
+            OwnAblation::BorrowModel => features.borrow_model = false,
+            OwnAblation::LocalDirectives => features.local_directives = false,
+            OwnAblation::LocalCalleeContracts => features.local_callee_contracts = false,
+            OwnAblation::OwnedReturnPropagation => features.owned_return_propagation = false,
+            OwnAblation::InstanceDispatch => features.instance_dispatch = false,
+            OwnAblation::ControlFlowSplitting => features.control_flow_splitting = false,
+            OwnAblation::LoopDepth => features.loop_depth = false,
+            OwnAblation::NonConsumingPaths => features.non_consuming_paths = false,
+            OwnAblation::UnknownCallConservatism => features.unknown_call_conservatism = false,
+            OwnAblation::UnmappedGuards => features.unmapped_guards = false,
+        }
+        features
+    }
+}
+
+impl Default for OwnFeatures {
+    fn default() -> Self {
+        Self::all()
+    }
+}
 
 /// Kind of ownership/borrow rule that was violated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -132,7 +264,20 @@ pub fn check_source(filename: &str, source: &str) -> CheckResult {
 
 /// Like [`check_source`], with an explicit runtime prelude.
 pub fn check_source_with(filename: &str, source: &str, runtime: Runtime) -> CheckResult {
-    let diagnostics = check::check_source(filename, source, runtime);
+    check_source_with_features(filename, source, runtime, OwnFeatures::default())
+}
+
+/// Check a source string with an explicit semantic feature set.
+///
+/// This is an experimental entry point for ablation studies; normal callers
+/// should use [`check_source_with`].
+pub fn check_source_with_features(
+    filename: &str,
+    source: &str,
+    runtime: Runtime,
+    features: OwnFeatures,
+) -> CheckResult {
+    let diagnostics = check::check_source_with_features(filename, source, runtime, features);
     CheckResult {
         diagnostics,
         sources: vec![(filename.to_string(), source.to_string())],
@@ -146,7 +291,18 @@ pub fn check_parsed_with(
     program: &pragma_parse::Program<'_>,
     runtime: Runtime,
 ) -> CheckResult {
-    check_parsed_with_payloads(filename, source, program, runtime, None)
+    check_parsed_with_features(filename, source, program, runtime, OwnFeatures::default())
+}
+
+/// Like [`check_parsed_with`], with an explicit semantic feature set.
+pub fn check_parsed_with_features(
+    filename: &str,
+    source: &str,
+    program: &pragma_parse::Program<'_>,
+    runtime: Runtime,
+    features: OwnFeatures,
+) -> CheckResult {
+    check_parsed_with_payloads_and_features(filename, source, program, runtime, None, features)
 }
 
 /// Like [`check_parsed_with`], filling omitted payload names from `payloads`.
@@ -157,8 +313,29 @@ pub fn check_parsed_with_payloads(
     runtime: Runtime,
     payloads: Option<&dyn PayloadNames>,
 ) -> CheckResult {
+    check_parsed_with_payloads_and_features(
+        filename,
+        source,
+        program,
+        runtime,
+        payloads,
+        OwnFeatures::default(),
+    )
+}
+
+/// Like [`check_parsed_with_payloads`], with an explicit semantic feature set.
+pub fn check_parsed_with_payloads_and_features(
+    filename: &str,
+    source: &str,
+    program: &pragma_parse::Program<'_>,
+    runtime: Runtime,
+    payloads: Option<&dyn PayloadNames>,
+    features: OwnFeatures,
+) -> CheckResult {
     CheckResult {
-        diagnostics: check_program_with_payloads(filename, source, program, runtime, payloads),
+        diagnostics: check_program_with_payloads_and_features(
+            filename, source, program, runtime, payloads, features,
+        ),
         sources: vec![(filename.to_string(), source.to_string())],
     }
 }

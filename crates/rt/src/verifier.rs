@@ -179,12 +179,84 @@ struct FixpointConstraint<'a> {
     consequent: &'a Term,
 }
 
+/// Constraint backend selector used by the ablation runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConstraintSolver {
+    #[default]
+    FixedpointWithSmtFallback,
+    DirectSmt,
+}
+
+/// Optional verifier components exposed for controlled ablation experiments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtAblation {
+    IntConversionAxioms,
+    AbstractPredicateCongruence,
+}
+
+/// Verifier configuration. The default retains the production behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RtFeatures {
+    pub constraint_solver: ConstraintSolver,
+    pub int_conversion_axioms: bool,
+    pub abstract_predicate_congruence: bool,
+}
+
+impl RtFeatures {
+    pub fn without(mut self, ablation: RtAblation) -> Self {
+        match ablation {
+            RtAblation::IntConversionAxioms => self.int_conversion_axioms = false,
+            RtAblation::AbstractPredicateCongruence => {
+                self.abstract_predicate_congruence = false;
+            }
+        }
+        self
+    }
+}
+
+impl Default for RtFeatures {
+    fn default() -> Self {
+        Self {
+            constraint_solver: ConstraintSolver::default(),
+            int_conversion_axioms: true,
+            abstract_predicate_congruence: true,
+        }
+    }
+}
+
+impl From<ConstraintSolver> for RtFeatures {
+    fn from(constraint_solver: ConstraintSolver) -> Self {
+        Self {
+            constraint_solver,
+            ..Self::default()
+        }
+    }
+}
+
 pub(crate) fn verify_source<'a>(
     source: &'a str,
     file_name: &'a str,
     annotations: &[Annotation],
     environment: Environment,
     compiler_hints: Option<&'a CompilerHints>,
+) -> Vec<RtError> {
+    verify_source_with_features(
+        source,
+        file_name,
+        annotations,
+        environment,
+        compiler_hints,
+        RtFeatures::default(),
+    )
+}
+
+pub(crate) fn verify_source_with_features<'a>(
+    source: &'a str,
+    file_name: &'a str,
+    annotations: &[Annotation],
+    environment: Environment,
+    compiler_hints: Option<&'a CompilerHints>,
+    features: RtFeatures,
 ) -> Vec<RtError> {
     let allocator = Allocator::default();
     let parsed = parse(&allocator, file_name, source);
@@ -194,13 +266,14 @@ pub(crate) fn verify_source<'a>(
             loc: None,
         }];
     }
-    verify_program(
+    verify_program_with_features(
         source,
         file_name,
         &parsed.program,
         annotations,
         environment,
         compiler_hints,
+        features,
     )
 }
 
@@ -211,6 +284,26 @@ pub(crate) fn verify_program<'a>(
     annotations: &[Annotation],
     environment: Environment,
     compiler_hints: Option<&'a CompilerHints>,
+) -> Vec<RtError> {
+    verify_program_with_features(
+        source,
+        file_name,
+        program,
+        annotations,
+        environment,
+        compiler_hints,
+        RtFeatures::default(),
+    )
+}
+
+pub(crate) fn verify_program_with_features<'a>(
+    source: &'a str,
+    file_name: &'a str,
+    program: &Program<'_>,
+    annotations: &[Annotation],
+    environment: Environment,
+    compiler_hints: Option<&'a CompilerHints>,
+    features: RtFeatures,
 ) -> Vec<RtError> {
     let library = match crate::prelude::registry_for_program(environment, program) {
         Ok(library) => library,
@@ -238,6 +331,7 @@ pub(crate) fn verify_program<'a>(
         consumed_variable_types: HashSet::new(),
         errors: annotation_errors,
         fresh: 0,
+        features,
     };
     verifier.verify_program(program);
     verifier.errors
@@ -388,6 +482,7 @@ struct Verifier<'a> {
     consumed_variable_types: HashSet<u32>,
     errors: Vec<RtError>,
     fresh: usize,
+    features: RtFeatures,
 }
 
 struct CompilerSubexpressionValidator<'verifier, 'source> {
@@ -1558,7 +1653,7 @@ impl Verifier<'_> {
                     let mut then_state = state.clone();
                     then_state.assumptions.push(test.term.clone());
                     Self::narrow_qualifiers(&mut then_state, &test.term);
-                    if Self::path_is_reachable(&then_state) {
+                    if self.path_is_reachable(&then_state) {
                         output.extend(self.verify_statement(
                             &if_statement.consequent,
                             vec![then_state],
@@ -1570,7 +1665,7 @@ impl Verifier<'_> {
                     let negated = Term::Not(Box::new(test.term));
                     else_state.assumptions.push(negated.clone());
                     Self::narrow_qualifiers(&mut else_state, &negated);
-                    if Self::path_is_reachable(&else_state) {
+                    if self.path_is_reachable(&else_state) {
                         if let Some(alternate) = &if_statement.alternate {
                             output.extend(self.verify_statement(
                                 alternate,
@@ -4245,13 +4340,16 @@ impl Verifier<'_> {
         }
     }
 
-    fn path_is_reachable(state: &State) -> bool {
+    fn path_is_reachable(&self, state: &State) -> bool {
         let impossible = Term::Bool(false);
         let constraint = FixpointConstraint {
             assumptions: &state.assumptions,
             consequent: &impossible,
         };
-        !matches!(solve_constraint(&constraint), Ok(SatResult::Unsat))
+        !matches!(
+            solve_constraint_using(&constraint, self.features),
+            Ok(SatResult::Unsat)
+        )
     }
 
     fn prove(&mut self, assumptions: &[Term], goal: &Term, message: String, loc: SourceLocation) {
@@ -4259,7 +4357,7 @@ impl Verifier<'_> {
             assumptions,
             consequent: goal,
         };
-        match solve_constraint(&constraint) {
+        match solve_constraint_using(&constraint, self.features) {
             Ok(SatResult::Unsat) => {}
             Ok(SatResult::Sat) => self.errors.push(RtError {
                 message,
@@ -4281,7 +4379,10 @@ impl Verifier<'_> {
             assumptions,
             consequent: goal,
         };
-        matches!(solve_constraint(&constraint), Ok(SatResult::Unsat))
+        matches!(
+            solve_constraint_using(&constraint, self.features),
+            Ok(SatResult::Unsat)
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4545,16 +4646,30 @@ fn collect_int_literals(term: &Term, output: &mut HashSet<i64>) {
     }
 }
 
+#[cfg(test)]
 fn solve_constraint(constraint: &FixpointConstraint<'_>) -> Result<SatResult, String> {
-    let (mut assumptions, consequent) = abstract_predicate_applications(constraint)?;
-    assumptions.extend(int_conversion_axioms(
-        &assumptions
-            .iter()
-            .chain(std::iter::once(&consequent))
-            .collect::<Vec<_>>(),
-    ));
+    solve_constraint_using(constraint, RtFeatures::default())
+}
+
+fn solve_constraint_using(
+    constraint: &FixpointConstraint<'_>,
+    features: RtFeatures,
+) -> Result<SatResult, String> {
+    let (mut assumptions, consequent) =
+        abstract_predicate_applications(constraint, features.abstract_predicate_congruence)?;
+    if features.int_conversion_axioms {
+        assumptions.extend(int_conversion_axioms(
+            &assumptions
+                .iter()
+                .chain(std::iter::once(&consequent))
+                .collect::<Vec<_>>(),
+        ));
+    }
     if assumptions.contains(&consequent) {
         return Ok(SatResult::Unsat);
+    }
+    if features.constraint_solver == ConstraintSolver::DirectSmt {
+        return solve_constraint_with_smt(&assumptions, &consequent);
     }
     let constraint = FixpointConstraint {
         assumptions: &assumptions,
@@ -4657,6 +4772,7 @@ fn solve_constraint_with_smt(assumptions: &[Term], consequent: &Term) -> Result<
 /// can discharge a polymorphic obligation vacuously.
 fn abstract_predicate_applications(
     constraint: &FixpointConstraint<'_>,
+    preserve_congruence: bool,
 ) -> Result<(Vec<Term>, Term), String> {
     let mut atoms = Vec::new();
     let mut assumptions: Vec<Term> = constraint
@@ -4679,22 +4795,25 @@ fn abstract_predicate_applications(
         }
     }
 
-    for left_index in 0..atoms.len() {
-        for right_index in (left_index + 1)..atoms.len() {
-            let (left_name, left_argument, left_atom) = &atoms[left_index];
-            let (right_name, right_argument, right_atom) = &atoms[right_index];
-            if left_name != right_name {
-                continue;
+    if preserve_congruence {
+        for left_index in 0..atoms.len() {
+            for right_index in (left_index + 1)..atoms.len() {
+                let (left_name, left_argument, left_atom) = &atoms[left_index];
+                let (right_name, right_argument, right_atom) = &atoms[right_index];
+                if left_name != right_name {
+                    continue;
+                }
+                let arguments_differ = Term::Not(Box::new(Term::Same(
+                    Box::new(left_argument.clone()),
+                    Box::new(right_argument.clone()),
+                )));
+                let results_match =
+                    Term::Eq(Box::new(left_atom.clone()), Box::new(right_atom.clone()));
+                assumptions.push(Term::Or(
+                    Box::new(arguments_differ),
+                    Box::new(results_match),
+                ));
             }
-            let arguments_differ = Term::Not(Box::new(Term::Same(
-                Box::new(left_argument.clone()),
-                Box::new(right_argument.clone()),
-            )));
-            let results_match = Term::Eq(Box::new(left_atom.clone()), Box::new(right_atom.clone()));
-            assumptions.push(Term::Or(
-                Box::new(arguments_differ),
-                Box::new(results_match),
-            ));
         }
     }
 
@@ -7060,6 +7179,102 @@ mod ieee_equality_tests {
             result,
             SatResult::Unsat,
             "x === x must not prove true for all JS numbers (NaN)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod ablation_tests {
+    use super::*;
+
+    fn direct_smt_features() -> RtFeatures {
+        RtFeatures {
+            constraint_solver: ConstraintSolver::DirectSmt,
+            ..RtFeatures::default()
+        }
+    }
+
+    #[test]
+    fn defaults_keep_all_verifier_features_enabled() {
+        let features = RtFeatures::default();
+        assert_eq!(
+            features.constraint_solver,
+            ConstraintSolver::FixedpointWithSmtFallback
+        );
+        assert!(features.int_conversion_axioms);
+        assert!(features.abstract_predicate_congruence);
+    }
+
+    #[test]
+    fn int_conversion_axiom_ablation_changes_the_int_literal_bridge() {
+        let goal = Term::Eq(
+            Box::new(Term::ToNumber(Box::new(Term::Int(1)))),
+            Box::new(Term::Number(1)),
+        );
+        let constraint = FixpointConstraint {
+            assumptions: &[],
+            consequent: &goal,
+        };
+
+        assert_eq!(
+            solve_constraint_using(&constraint, direct_smt_features()).unwrap(),
+            SatResult::Unsat
+        );
+        assert_eq!(
+            solve_constraint_using(
+                &constraint,
+                direct_smt_features().without(RtAblation::IntConversionAxioms),
+            )
+            .unwrap(),
+            SatResult::Sat
+        );
+    }
+
+    #[test]
+    fn congruence_ablation_makes_equal_argument_results_independent() {
+        let x = Term::Var("x".into(), Sort::Int);
+        let y = Term::Var("y".into(), Sort::Int);
+        let assumptions = vec![
+            Term::Same(Box::new(x.clone()), Box::new(y.clone())),
+            Term::Pred("p".into(), Box::new(x)),
+        ];
+        let goal = Term::Pred("p".into(), Box::new(y));
+        let constraint = FixpointConstraint {
+            assumptions: &assumptions,
+            consequent: &goal,
+        };
+
+        assert_eq!(
+            solve_constraint_using(&constraint, direct_smt_features()).unwrap(),
+            SatResult::Unsat
+        );
+        assert_eq!(
+            solve_constraint_using(
+                &constraint,
+                direct_smt_features().without(RtAblation::AbstractPredicateCongruence),
+            )
+            .unwrap(),
+            SatResult::Sat
+        );
+    }
+
+    #[test]
+    fn congruence_ablation_still_validates_predicate_domains() {
+        let assumptions = vec![Term::Pred("p".into(), Box::new(Term::Int(0)))];
+        let goal = Term::Pred("p".into(), Box::new(Term::Bool(true)));
+        let constraint = FixpointConstraint {
+            assumptions: &assumptions,
+            consequent: &goal,
+        };
+        let error = solve_constraint_using(
+            &constraint,
+            direct_smt_features().without(RtAblation::AbstractPredicateCongruence),
+        )
+        .expect_err("mixed predicate domains must remain an error");
+
+        assert_eq!(
+            error,
+            "Predicate parameter 'p' is applied to incompatible base types"
         );
     }
 }

@@ -23,6 +23,9 @@ cargo run -p pragmajs -- check crates/rt/fixtures/sqrt.js
 cargo run -p pragmajs -- build --target ecmascript crates/rt/fixtures/sqrt.js output.js
 ```
 
+消融实验、gold corpus、基线反例与复现命令见
+[`docs/ablation.md`](docs/ablation.md)。
+
 仓库：[github.com/AkaraChen/pragmajs](https://github.com/AkaraChen/pragmajs)。独立仓库 [refinejs](https://github.com/AkaraChen/refinejs) 已停更，指向这里。
 
 ## License

@@ -1,7 +1,7 @@
 //! Austral-style linearity / borrow checker over an oxc AST.
 
 use crate::annot::{parse_own_comment, AttachedOwn, BorrowMode, FnSig, OwnDirective, OwnType};
-use crate::{Diagnostic, RuleKind};
+use crate::{Diagnostic, OwnFeatures, RuleKind};
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     ArrowFunctionBody, ArrowFunctionExpression, BindingPattern, CallExpression, Expression,
@@ -52,10 +52,15 @@ pub fn own_payload_name(rendered: &str) -> Option<String> {
     }
 }
 
-pub fn check_source(filename: &str, source: &str, runtime: crate::Runtime) -> Vec<Diagnostic> {
+pub(crate) fn check_source_with_features(
+    filename: &str,
+    source: &str,
+    runtime: crate::Runtime,
+    features: OwnFeatures,
+) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
     let parsed = parse(&allocator, filename, source);
-    check_program(filename, source, &parsed.program, runtime)
+    check_program_with_features(filename, source, &parsed.program, runtime, features)
 }
 
 /// Check a program that has already been parsed with `pragma_parse`.
@@ -65,7 +70,18 @@ pub fn check_program(
     program: &Program<'_>,
     runtime: crate::Runtime,
 ) -> Vec<Diagnostic> {
-    check_program_with_payloads(path, source, program, runtime, None)
+    check_program_with_features(path, source, program, runtime, OwnFeatures::default())
+}
+
+/// Check an already parsed program with an explicit semantic feature set.
+pub fn check_program_with_features(
+    path: &str,
+    source: &str,
+    program: &Program<'_>,
+    runtime: crate::Runtime,
+    features: OwnFeatures,
+) -> Vec<Diagnostic> {
+    check_program_with_payloads_and_features(path, source, program, runtime, None, features)
 }
 
 /// Like [`check_program`], filling omitted payload names from `payloads`.
@@ -76,6 +92,25 @@ pub fn check_program_with_payloads(
     runtime: crate::Runtime,
     payloads: Option<&dyn PayloadNames>,
 ) -> Vec<Diagnostic> {
+    check_program_with_payloads_and_features(
+        path,
+        source,
+        program,
+        runtime,
+        payloads,
+        OwnFeatures::default(),
+    )
+}
+
+/// Like [`check_program_with_payloads`], with an explicit semantic feature set.
+pub fn check_program_with_payloads_and_features(
+    path: &str,
+    source: &str,
+    program: &Program<'_>,
+    runtime: crate::Runtime,
+    payloads: Option<&dyn PayloadNames>,
+    features: OwnFeatures,
+) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     let mut annots: HashMap<u32, Vec<AttachedOwn>> = HashMap::new();
     for comment in program.comments.iter() {
@@ -85,13 +120,16 @@ pub fn check_program_with_payloads(
         }
     }
 
+    let prelude_sigs = crate::prelude::signatures(runtime);
     let mut file = FileCtx {
         path: path.to_string(),
         source,
         annots,
-        sigs: crate::prelude::signatures(runtime),
+        sigs: prelude_sigs.clone(),
+        prelude_sigs,
         ns_prefix: Vec::new(),
         payloads,
+        features,
     };
     file.collect_sigs_program(program);
     let mut checker = Checker {
@@ -105,17 +143,14 @@ pub fn check_program_with_payloads(
         try_finally_depth: 0,
         pending_finally: Vec::new(),
         checked_bodies: HashSet::new(),
+        features,
     };
     checker.check_program(program);
     checker.diags
 }
 
 /// Byte offsets whose omitted `/*#own` payloads should be queried from TypeScript.
-pub fn omitted_payload_offsets(
-    path: &str,
-    source: &str,
-    program: &Program<'_>,
-) -> Vec<u32> {
+pub fn omitted_payload_offsets(path: &str, source: &str, program: &Program<'_>) -> Vec<u32> {
     let mut diags = Vec::new();
     let mut annots: HashMap<u32, Vec<AttachedOwn>> = HashMap::new();
     for comment in program.comments.iter() {
@@ -131,10 +166,7 @@ pub fn omitted_payload_offsets(
     offsets
 }
 
-fn dirs_in(
-    annots: &HashMap<u32, Vec<AttachedOwn>>,
-    offset: u32,
-) -> Vec<&OwnDirective> {
+fn dirs_in(annots: &HashMap<u32, Vec<AttachedOwn>>, offset: u32) -> Vec<&OwnDirective> {
     let mut out = Vec::new();
     if let Some(atts) = annots.get(&offset) {
         for a in atts {
@@ -176,7 +208,9 @@ fn collect_omitted_stmt(
     let extra = extra.into_iter().collect::<Vec<_>>();
     match stmt {
         Statement::FunctionDeclaration(f) => collect_omitted_fn(f, annots, out, &extra),
-        Statement::VariableDeclaration(v) => collect_omitted_var(v, annots, out, extra.first().copied()),
+        Statement::VariableDeclaration(v) => {
+            collect_omitted_var(v, annots, out, extra.first().copied())
+        }
         Statement::ExportDeclaration(e) => {
             collect_omitted_stmt_decl(&e.declaration, annots, out, Some(e.span.start));
         }
@@ -332,8 +366,10 @@ struct FileCtx<'a> {
     source: &'a str,
     annots: HashMap<u32, Vec<AttachedOwn>>,
     sigs: HashMap<String, FnSig>,
+    prelude_sigs: HashMap<String, FnSig>,
     ns_prefix: Vec<String>,
     payloads: Option<&'a dyn PayloadNames>,
+    features: OwnFeatures,
 }
 
 impl FileCtx<'_> {
@@ -350,6 +386,9 @@ impl FileCtx<'_> {
     }
 
     fn type_sig_at(&self, offsets: &[u32]) -> Option<FnSig> {
+        if !self.features.function_contracts {
+            return None;
+        }
         for o in offsets {
             for d in self.dirs_at(*o) {
                 if let OwnDirective::Type(sig) = d {
@@ -2480,10 +2519,25 @@ struct Checker<'a> {
     pending_finally: Vec<Option<HashMap<String, VarEntry>>>,
     /// Skip re-entry so the first annotation offsets win.
     checked_bodies: HashSet<u32>,
+    features: OwnFeatures,
 }
 
 impl Checker<'_> {
+    fn callee_sig(&self, name: &str) -> Option<&FnSig> {
+        if self.features.local_callee_contracts {
+            self.file.sigs.get(name)
+        } else {
+            self.file.prelude_sigs.get(name)
+        }
+    }
+
     fn emit(&mut self, offset: u32, kind: RuleKind, message: impl Into<String>) {
+        if kind == RuleKind::UniqueForget && !self.features.exact_once {
+            return;
+        }
+        if kind == RuleKind::UnmappedConstruct && !self.features.unmapped_guards {
+            return;
+        }
         self.diags.push(Diagnostic {
             path: self.file.path.clone(),
             offset,
@@ -2527,7 +2581,7 @@ impl Checker<'_> {
             return;
         };
         match entry.kind {
-            OwnKind::Unique if entry.state != VarState::Consumed => {
+            OwnKind::Unique if self.features.exact_once && entry.state != VarState::Consumed => {
                 self.emit(
                     entry.defined_at,
                     RuleKind::UniqueForget,
@@ -2544,6 +2598,9 @@ impl Checker<'_> {
     }
 
     fn begin_borrow(&mut self, owner: &str, alias: &str, mode: BorrowMode, span: u32) {
+        if !self.features.borrow_model {
+            return;
+        }
         let Some(entry) = self.tbl.get(owner) else {
             self.emit(
                 span,
@@ -2659,6 +2716,17 @@ impl Checker<'_> {
             Statement::IfStatement(i) => {
                 self.check_expr(&i.test, i.test.span().start);
                 self.check_discard(&i.test);
+                if !self.features.control_flow_splitting {
+                    self.push_scope();
+                    self.check_stmt(&i.consequent);
+                    self.pop_scope();
+                    if let Some(alt) = &i.alternate {
+                        self.push_scope();
+                        self.check_stmt(alt);
+                        self.pop_scope();
+                    }
+                    return;
+                }
                 let saved = self.tbl.clone();
                 self.push_scope();
                 self.check_stmt(&i.consequent);
@@ -2770,6 +2838,20 @@ impl Checker<'_> {
             Statement::SwitchStatement(s) => {
                 self.check_expr(&s.discriminant, s.discriminant.span().start);
                 self.check_discard(&s.discriminant);
+                if !self.features.control_flow_splitting {
+                    for case in &s.cases {
+                        if let Some(test) = &case.test {
+                            self.check_expr(test, test.span().start);
+                            self.check_discard(test);
+                        }
+                        self.push_scope();
+                        for st in &case.consequent {
+                            self.check_stmt(st);
+                        }
+                        self.pop_scope();
+                    }
+                    return;
+                }
                 let base = self.tbl.clone();
                 let mut tables: Vec<HashMap<String, VarEntry>> = Vec::new();
                 let has_default = s.cases.iter().any(|c| c.test.is_none());
@@ -2807,6 +2889,31 @@ impl Checker<'_> {
                 }
             }
             Statement::TryStatement(t) => {
+                if !self.features.control_flow_splitting {
+                    self.push_scope();
+                    for s in &t.block.body {
+                        self.check_stmt(s);
+                    }
+                    self.pop_scope();
+                    if let Some(h) = &t.handler {
+                        self.push_scope();
+                        if let Some(p) = &h.param {
+                            self.check_discard_binding(&p.pattern);
+                        }
+                        for s in &h.body.body {
+                            self.check_stmt(s);
+                        }
+                        self.pop_scope();
+                    }
+                    if let Some(fin) = &t.finalizer {
+                        self.push_scope();
+                        for s in &fin.body {
+                            self.check_stmt(s);
+                        }
+                        self.pop_scope();
+                    }
+                    return;
+                }
                 let has_finally = t.finalizer.is_some();
                 if has_finally {
                     self.try_finally_depth += 1;
@@ -3108,6 +3215,9 @@ impl Checker<'_> {
     }
 
     fn apply_stmt_directives(&mut self, stmt: &Statement<'_>) {
+        if !self.features.local_directives {
+            return;
+        }
         // Variable declarations apply let/borrow/clone themselves.
         if matches!(stmt, Statement::VariableDeclaration(_)) {
             return;
@@ -3191,9 +3301,7 @@ impl Checker<'_> {
         self.emit(
             span,
             RuleKind::MissingType,
-            format!(
-                "/*#own omitted a type for `{label}` and TypeScript did not supply one"
-            ),
+            format!("/*#own omitted a type for `{label}` and TypeScript did not supply one"),
         );
         ty.clone()
     }
@@ -3201,11 +3309,14 @@ impl Checker<'_> {
     fn add_from_type(&mut self, name: &str, ty: &OwnType, span: u32) {
         let ty = self.resolve_payload(ty, span, name);
         let (kind, ty_name) = match &ty {
+            OwnType::Unique(_) | OwnType::Affine(_) if !self.features.move_tracking => return,
             OwnType::Unique(s) => (OwnKind::Unique, s.clone()),
-            OwnType::Affine(s) => (OwnKind::Affine, s.clone()),
+            OwnType::Affine(s) if self.features.affine_kind => (OwnKind::Affine, s.clone()),
+            OwnType::Affine(_) => return,
             OwnType::Copy(_) => return,
-            OwnType::RefRead(s) => (OwnKind::RefRead, s.clone()),
-            OwnType::RefWrite(s) => (OwnKind::RefWrite, s.clone()),
+            OwnType::RefRead(s) if self.features.borrow_model => (OwnKind::RefRead, s.clone()),
+            OwnType::RefWrite(s) if self.features.borrow_model => (OwnKind::RefWrite, s.clone()),
+            OwnType::RefRead(_) | OwnType::RefWrite(_) => return,
             OwnType::Void => return,
         };
         self.add_var(
@@ -3242,13 +3353,22 @@ impl Checker<'_> {
             }
             let mut dirs = decl_dirs.clone();
             dirs.extend(self.file.dirs_at(d.span.start).into_iter().cloned());
+            if !self.features.local_directives {
+                dirs.clear();
+            }
             let name = ident_of_pattern(&d.id);
-            let borrow = dirs.iter().find_map(|x| match x {
-                OwnDirective::Borrow {
-                    owner, alias, mode, ..
-                } => Some((owner.clone(), alias.clone(), *mode)),
-                _ => None,
-            });
+            let borrow = self
+                .features
+                .borrow_model
+                .then(|| {
+                    dirs.iter().find_map(|x| match x {
+                        OwnDirective::Borrow {
+                            owner, alias, mode, ..
+                        } => Some((owner.clone(), alias.clone(), *mode)),
+                        _ => None,
+                    })
+                })
+                .flatten();
             let clone = dirs.iter().find_map(|x| match x {
                 OwnDirective::Clone { owner, alias } => Some((owner.clone(), alias.clone())),
                 _ => None,
@@ -3586,6 +3706,9 @@ impl Checker<'_> {
     }
 
     fn require_consumed_uniques(&mut self, span: u32, emit: bool) {
+        if !self.features.exact_once {
+            return;
+        }
         let names: Vec<_> = self.tbl.keys().cloned().collect();
         for name in names {
             if let Some(e) = self.tbl.get(&name) {
@@ -3612,6 +3735,9 @@ impl Checker<'_> {
         b: &HashMap<String, VarEntry>,
         span: u32,
     ) {
+        if !self.features.control_flow_splitting {
+            return;
+        }
         for (name, ea) in a {
             if let Some(eb) = b.get(name) {
                 if ea.state != eb.state {
@@ -3846,7 +3972,9 @@ impl Checker<'_> {
             }
             _ => {}
         }
-        if matches!(self.call_return_type(expr), Some(OwnType::Unique(_)))
+        if self.features.move_tracking
+            && self.features.exact_once
+            && matches!(self.call_return_type(expr), Some(OwnType::Unique(_)))
             && !is_fs_readfile_callback(expr)
         {
             let offset = expr.span().start;
@@ -3872,7 +4000,7 @@ impl Checker<'_> {
 
     fn check_call_callee(&mut self, call: &CallExpression<'_>) {
         if let Some((_, sig)) = self.instance_sig(call) {
-            let mode = param_mode(sig.params.first().map(|(_, ty)| ty));
+            let mode = self.parameter_mode(sig.params.first().map(|(_, ty)| ty));
             if mode == ArgMode::Consume {
                 if let Some(object) = instance_member_object(call) {
                     if ident_name(object).is_none() {
@@ -4216,6 +4344,9 @@ impl Checker<'_> {
     }
 
     fn call_return_type(&self, expr: &Expression<'_>) -> Option<OwnType> {
+        if !self.features.owned_return_propagation {
+            return None;
+        }
         let expr = peel(expr);
         match expr {
             Expression::SequenceExpression(s) => {
@@ -4254,14 +4385,14 @@ impl Checker<'_> {
             }
             Expression::TaggedTemplateExpression(t) => {
                 if let Some(name) = callee_name(&t.tag) {
-                    return self.file.sigs.get(&name).map(|s| s.ret.clone());
+                    return self.callee_sig(&name).map(|s| s.ret.clone());
                 }
             }
             _ => {}
         }
         if let Expression::NewExpression(n) = peel(expr) {
             if let Some(name) = callee_name(&n.callee) {
-                return self.file.sigs.get(&name).map(|s| s.ret.clone());
+                return self.callee_sig(&name).map(|s| s.ret.clone());
             }
         }
         let call = as_call(expr)?;
@@ -4269,7 +4400,7 @@ impl Checker<'_> {
             return Some(sig.ret.clone());
         }
         if let Some(name) = callee_name(&call.callee) {
-            if let Some(s) = self.file.sigs.get(&name) {
+            if let Some(s) = self.callee_sig(&name) {
                 return Some(s.ret.clone());
             }
         }
@@ -4293,6 +4424,9 @@ impl Checker<'_> {
 
     /// `buf.toString()` → prelude key `Buffer#toString` using the receiver's own type.
     fn instance_sig(&self, call: &CallExpression<'_>) -> Option<(String, FnSig)> {
+        if !self.features.instance_dispatch {
+            return None;
+        }
         let (object, method) = match &call.callee {
             Expression::StaticMemberExpression(m) => {
                 (&m.object, m.property.name.as_str().to_string())
@@ -4313,7 +4447,7 @@ impl Checker<'_> {
             (String::new(), ty.to_string())
         };
         let key = format!("{ty}#{method}");
-        let sig = self.file.sigs.get(&key)?.clone();
+        let sig = self.callee_sig(&key)?.clone();
         Some((recv, sig))
     }
 
@@ -4370,6 +4504,10 @@ impl Checker<'_> {
                 self.check_expr(&c.test, c.test.span().start);
                 let saved = self.tbl.clone();
                 self.check_expr(&c.consequent, c.consequent.span().start);
+                if !self.features.control_flow_splitting {
+                    self.check_expr(&c.alternate, c.alternate.span().start);
+                    return;
+                }
                 let then_tbl = self.tbl.clone();
                 self.tbl = saved;
                 self.check_expr(&c.alternate, c.alternate.span().start);
@@ -4946,11 +5084,17 @@ impl Checker<'_> {
             Expression::NewExpression(n) => {
                 let mut apps = self.count(&n.callee, name);
                 let callee = callee_name(&n.callee);
-                let sig = callee.as_ref().and_then(|n| self.file.sigs.get(n));
+                let sig = callee.as_ref().and_then(|n| self.callee_sig(n));
                 for (i, arg) in n.arguments.iter().enumerate() {
                     match arg {
                         oxc::ast::ast::Argument::SpreadElement(s) => {
-                            apps = apps.merge(self.count(&s.argument, name));
+                            let spread =
+                                if sig.is_none() && !self.features.unknown_call_conservatism {
+                                    self.as_non_consuming(self.count(&s.argument, name))
+                                } else {
+                                    self.count(&s.argument, name)
+                                };
+                            apps = apps.merge(spread);
                         }
                         other => {
                             if let Some(e) = other.as_expression() {
@@ -5170,7 +5314,7 @@ impl Checker<'_> {
             Expression::TaggedTemplateExpression(t) => {
                 let mut a = self.count(&t.tag, name);
                 let callee = callee_name(&t.tag);
-                let sig = callee.as_ref().and_then(|n| self.file.sigs.get(n));
+                let sig = callee.as_ref().and_then(|n| self.callee_sig(n));
                 for (i, e) in t.quasi.expressions.iter().enumerate() {
                     let mode = self.arg_mode(e, sig, i + 1);
                     a = a.merge(self.count_arg(e, name, mode));
@@ -5359,7 +5503,7 @@ impl Checker<'_> {
                 }
             }
             if recv == name {
-                let mode = param_mode(sig.params.first().map(|(_, ty)| ty));
+                let mode = self.parameter_mode(sig.params.first().map(|(_, ty)| ty));
                 apps = apps.merge(self.count_arg_ident(name, mode));
             }
             for (i, arg) in call.arguments.iter().enumerate() {
@@ -5379,11 +5523,16 @@ impl Checker<'_> {
         }
         let mut apps = self.count(&call.callee, name);
         let callee = callee_name(&call.callee);
-        let sig = callee.as_ref().and_then(|n| self.file.sigs.get(n));
+        let sig = callee.as_ref().and_then(|n| self.callee_sig(n));
         for (i, arg) in call.arguments.iter().enumerate() {
             match arg {
                 oxc::ast::ast::Argument::SpreadElement(s) => {
-                    apps = apps.merge(self.count(&s.argument, name));
+                    let spread = if sig.is_none() && !self.features.unknown_call_conservatism {
+                        self.as_non_consuming(self.count(&s.argument, name))
+                    } else {
+                        self.count(&s.argument, name)
+                    };
+                    apps = apps.merge(spread);
                 }
                 other => {
                     if let Some(expr) = other.as_expression() {
@@ -5420,31 +5569,58 @@ impl Checker<'_> {
         }
     }
 
+    fn as_non_consuming(&self, apps: Apps) -> Apps {
+        Apps {
+            consumed: 0,
+            path: apps.path + apps.consumed,
+            ..apps
+        }
+    }
+
     fn arg_mode(&self, expr: &Expression<'_>, sig: Option<&FnSig>, i: usize) -> ArgMode {
         let start = expr.span().start;
-        for d in self.file.dirs_at(start) {
-            match d {
-                OwnDirective::Shorthand(BorrowMode::Read) => return ArgMode::Read,
-                OwnDirective::Shorthand(BorrowMode::Write) => return ArgMode::Write,
-                _ => {}
+        if self.features.local_directives && self.features.borrow_model {
+            for d in self.file.dirs_at(start) {
+                match d {
+                    OwnDirective::Shorthand(BorrowMode::Read) => return ArgMode::Read,
+                    OwnDirective::Shorthand(BorrowMode::Write) => return ArgMode::Write,
+                    _ => {}
+                }
             }
         }
         if let Some(sig) = sig {
             if let Some((_, ty)) = sig.params.get(i) {
-                return param_mode(Some(ty));
+                return self.parameter_mode(Some(ty));
             }
             // Extra args on a known callee inherit last copy/ref mode, else Path
             // (varargs such as console.log must not consume).
             if let Some((_, ty)) = sig.params.last() {
-                return match ty {
-                    OwnType::RefRead(_) => ArgMode::Read,
-                    OwnType::RefWrite(_) => ArgMode::Write,
+                return match self.parameter_mode(Some(ty)) {
+                    ArgMode::Read => ArgMode::Read,
+                    ArgMode::Write => ArgMode::Write,
                     _ => ArgMode::Path,
                 };
             }
             return ArgMode::Path;
         }
-        ArgMode::Consume
+        if self.features.unknown_call_conservatism {
+            ArgMode::Consume
+        } else {
+            ArgMode::Path
+        }
+    }
+
+    fn parameter_mode(&self, ty: Option<&OwnType>) -> ArgMode {
+        match ty {
+            Some(OwnType::Unique(_) | OwnType::Affine(_)) if !self.features.move_tracking => {
+                ArgMode::Path
+            }
+            Some(OwnType::Affine(_)) if !self.features.affine_kind => ArgMode::Path,
+            Some(OwnType::RefRead(_) | OwnType::RefWrite(_)) if !self.features.borrow_model => {
+                ArgMode::Path
+            }
+            _ => param_mode(ty),
+        }
     }
 
     fn count_arg(&self, expr: &Expression<'_>, name: &str, mode: ArgMode) -> Apps {
@@ -5478,6 +5654,15 @@ impl Checker<'_> {
     }
 
     fn apply_apps(&mut self, name: &str, apps: Apps, span: u32) {
+        let apps = if self.features.non_consuming_paths {
+            apps
+        } else {
+            Apps {
+                consumed: apps.consumed + apps.path,
+                path: 0,
+                ..apps
+            }
+        };
         let Some(entry) = self.tbl.get(name).cloned() else {
             return;
         };
@@ -5578,7 +5763,7 @@ impl Checker<'_> {
         let Some(entry) = self.tbl.get(name) else {
             return;
         };
-        if self.loop_depth != entry.loop_depth {
+        if self.features.loop_depth && self.loop_depth != entry.loop_depth {
             self.emit(
                 span,
                 RuleKind::ConsumeInLoop,
@@ -6188,7 +6373,7 @@ impl Checker<'_> {
             self.check_ts_type_args(ta);
         }
         self.check_discard(&t.tag);
-        let sig = callee_name(&t.tag).and_then(|n| self.file.sigs.get(&n).cloned());
+        let sig = callee_name(&t.tag).and_then(|n| self.callee_sig(&n).cloned());
         for (i, e) in t.quasi.expressions.iter().enumerate() {
             self.check_unique_arg(e, sig.as_ref(), i + 1);
         }
@@ -6215,7 +6400,7 @@ impl Checker<'_> {
                 }
             } else {
                 let callee = callee_name(&call.callee);
-                let sig = callee.as_ref().and_then(|n| self.file.sigs.get(n));
+                let sig = callee.as_ref().and_then(|n| self.callee_sig(n).cloned());
                 for (i, arg) in call.arguments.iter().enumerate() {
                     match arg {
                         oxc::ast::ast::Argument::SpreadElement(s) => {
@@ -6223,7 +6408,7 @@ impl Checker<'_> {
                         }
                         other => {
                             if let Some(e) = other.as_expression() {
-                                self.check_unique_arg(e, sig, i);
+                                self.check_unique_arg(e, sig.as_ref(), i);
                             }
                         }
                     }
@@ -6237,7 +6422,7 @@ impl Checker<'_> {
                     self.check_ts_type_args(ta);
                 }
                 let callee = callee_name(&n.callee);
-                let sig = callee.as_ref().and_then(|n| self.file.sigs.get(n));
+                let sig = callee.as_ref().and_then(|n| self.callee_sig(n).cloned());
                 for (i, arg) in n.arguments.iter().enumerate() {
                     match arg {
                         oxc::ast::ast::Argument::SpreadElement(s) => {
@@ -6245,7 +6430,7 @@ impl Checker<'_> {
                         }
                         other => {
                             if let Some(e) = other.as_expression() {
-                                self.check_unique_arg(e, sig, i);
+                                self.check_unique_arg(e, sig.as_ref(), i);
                             }
                         }
                     }

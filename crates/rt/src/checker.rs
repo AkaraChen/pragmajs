@@ -8,13 +8,48 @@ pub fn check_source_with_environment(
     annotations: &[Annotation],
     environment: crate::prelude::Environment,
 ) -> Vec<RtError> {
+    check_source_with_environment_and_features(
+        source,
+        file_name,
+        annotations,
+        environment,
+        crate::verifier::RtFeatures::default(),
+    )
+}
+
+/// Experimental entry point for comparing constraint backends.
+pub fn check_source_with_environment_and_solver(
+    source: &str,
+    file_name: &str,
+    annotations: &[Annotation],
+    environment: crate::prelude::Environment,
+    constraint_solver: crate::verifier::ConstraintSolver,
+) -> Vec<RtError> {
+    check_source_with_environment_and_features(
+        source,
+        file_name,
+        annotations,
+        environment,
+        constraint_solver.into(),
+    )
+}
+
+/// Experimental entry point for controlled verifier ablations.
+pub fn check_source_with_environment_and_features(
+    source: &str,
+    file_name: &str,
+    annotations: &[Annotation],
+    environment: crate::prelude::Environment,
+    features: crate::verifier::RtFeatures,
+) -> Vec<RtError> {
     let (filled, mut errors) = fill_omitted_bases(annotations, None);
-    errors.extend(crate::verifier::verify_source(
+    errors.extend(crate::verifier::verify_source_with_features(
         source,
         file_name,
         &filled,
         environment,
         None,
+        features,
     ));
     errors
 }
@@ -61,14 +96,53 @@ pub fn check_program_with_environment(
     annotations: &[Annotation],
     environment: crate::prelude::Environment,
 ) -> Vec<RtError> {
+    check_program_with_environment_and_features(
+        source,
+        file_name,
+        program,
+        annotations,
+        environment,
+        crate::verifier::RtFeatures::default(),
+    )
+}
+
+/// Experimental parsed-program entry point for comparing constraint backends.
+pub fn check_program_with_environment_and_solver(
+    source: &str,
+    file_name: &str,
+    program: &Program<'_>,
+    annotations: &[Annotation],
+    environment: crate::prelude::Environment,
+    constraint_solver: crate::verifier::ConstraintSolver,
+) -> Vec<RtError> {
+    check_program_with_environment_and_features(
+        source,
+        file_name,
+        program,
+        annotations,
+        environment,
+        constraint_solver.into(),
+    )
+}
+
+/// Experimental parsed-program entry point for controlled verifier ablations.
+pub fn check_program_with_environment_and_features(
+    source: &str,
+    file_name: &str,
+    program: &Program<'_>,
+    annotations: &[Annotation],
+    environment: crate::prelude::Environment,
+    features: crate::verifier::RtFeatures,
+) -> Vec<RtError> {
     let (filled, mut errors) = fill_omitted_bases(annotations, None);
-    errors.extend(crate::verifier::verify_program(
+    errors.extend(crate::verifier::verify_program_with_features(
         source,
         file_name,
         program,
         &filled,
         environment,
         None,
+        features,
     ));
     errors
 }
