@@ -4,7 +4,7 @@ use crate::syntax::{
 
 use super::{
     CallbackTiming, CallbackUse, Environment, FunctionEffects, FunctionSignature, LibraryExport,
-    LibraryParameter, LibraryRegistry, PropertySignature, ReceiverEffect, SemanticRefinement,
+    LibraryParameter, LibraryRegistry, ReceiverEffect, SemanticRefinement,
 };
 
 pub(crate) fn build(environment: Environment) -> LibraryRegistry {
@@ -157,16 +157,12 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
     registry.add_receiver_property(
         "Array",
         "length",
-        PropertySignature {
-            ty: non_negative_number(),
-        },
+        non_negative_number(),
     );
     registry.add_receiver_property(
         "String",
         "length",
-        PropertySignature {
-            ty: non_negative_number(),
-        },
+        non_negative_number(),
     );
     add_array_methods(registry);
 }
@@ -455,16 +451,12 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
     registry.add_receiver_property(
         "Response",
         "status",
-        PropertySignature {
-            ty: non_negative_number(),
-        },
+        non_negative_number(),
     );
     registry.add_receiver_property(
         "Response",
         "ok",
-        PropertySignature {
-            ty: primitive_type("boolean"),
-        },
+        primitive_type("boolean"),
     );
     registry.add_receiver_method(
         "Response",
@@ -540,31 +532,23 @@ fn add_dom(registry: &mut LibraryRegistry) {
         registry.add_receiver_property(
             receiver,
             "length",
-            PropertySignature {
-                ty: non_negative_number(),
-            },
+            non_negative_number(),
         );
     }
     registry.add_receiver_property(
         "Element",
         "childElementCount",
-        PropertySignature {
-            ty: non_negative_number(),
-        },
+        non_negative_number(),
     );
     registry.add_receiver_property(
         "Element",
         "children",
-        PropertySignature {
-            ty: named_type("HTMLCollection"),
-        },
+        named_type("HTMLCollection"),
     );
     registry.add_receiver_property(
         "Node",
         "textContent",
-        PropertySignature {
-            ty: nullable_type(primitive("string")),
-        },
+        nullable_type(primitive("string")),
     );
     registry.add_receiver_method(
         "Node",
@@ -586,9 +570,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
     registry.add_receiver_property(
         "Document",
         "body",
-        PropertySignature {
-            ty: nullable_type(named("HTMLElement")),
-        },
+        nullable_type(named("HTMLElement")),
     );
 
     registry.add_receiver_method(
@@ -693,17 +675,13 @@ fn add_node_globals(registry: &mut LibraryRegistry) {
         registry.add_receiver_property(
             receiver,
             "length",
-            PropertySignature {
-                ty: non_negative_number(),
-            },
+            non_negative_number(),
         );
     }
     registry.add_receiver_property(
         "NodeJS.Process",
         "argv",
-        PropertySignature {
-            ty: array_type(primitive("string")),
-        },
+        array_type(primitive("string")),
     );
 
     registry.add_static_function(
@@ -950,9 +928,7 @@ fn add_deno(registry: &mut LibraryRegistry) {
     registry.add_receiver_property(
         "Deno.Namespace",
         "args",
-        PropertySignature {
-            ty: array_type(primitive("string")),
-        },
+        array_type(primitive("string")),
     );
 
     registry.add_module_export(
@@ -981,16 +957,12 @@ fn add_bun(registry: &mut LibraryRegistry) {
     registry.add_receiver_property(
         "Bun.Namespace",
         "version",
-        PropertySignature {
-            ty: primitive_type("string"),
-        },
+        primitive_type("string"),
     );
     registry.add_receiver_property(
         "Bun.Namespace",
         "argv",
-        PropertySignature {
-            ty: array_type(primitive("string")),
-        },
+        array_type(primitive("string")),
     );
     registry.add_static_function(
         "Bun.stringWidth",
@@ -1062,16 +1034,12 @@ fn add_bun(registry: &mut LibraryRegistry) {
     registry.add_receiver_property(
         "BunFile",
         "size",
-        PropertySignature {
-            ty: non_negative_number(),
-        },
+        non_negative_number(),
     );
     registry.add_receiver_property(
         "Bun.Server",
         "port",
-        PropertySignature {
-            ty: non_negative_number(),
-        },
+        non_negative_number(),
     );
     registry.add_receiver_method(
         "Bun.Server",

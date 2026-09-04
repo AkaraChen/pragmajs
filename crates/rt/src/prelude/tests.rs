@@ -103,7 +103,6 @@ fn ecmascript_catalog_exposes_generic_array_contracts_and_refinements() {
         catalog
             .receiver_property("Array", "length")
             .unwrap()
-            .ty
             .predicate,
         Some(PredicateExpr::Binary(..))
     ));

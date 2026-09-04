@@ -2875,12 +2875,12 @@ impl Verifier<'_> {
             if let Some(mut property) = catalog_property {
                 let trust_refinement = state.library_semantics_intact || intrinsic_property;
                 if !trust_refinement {
-                    property.ty.predicate = None;
+                    property.predicate = None;
                     self.havoc_unmodeled_effects(state);
                 }
                 let trusted =
-                    trust_refinement || base_has_unambiguous_catalog_identity(&property.ty.base);
-                (property.ty, trusted)
+                    trust_refinement || base_has_unambiguous_catalog_identity(&property.base);
+                (property, trusted)
             } else if let Some(property) = structural_property {
                 let catalog_trusted = base_has_unambiguous_catalog_identity(&property.base);
                 (property, catalog_trusted)

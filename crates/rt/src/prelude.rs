@@ -13,7 +13,7 @@ pub use environment::{
 };
 pub use model::{
     CallbackTiming, CallbackUse, FunctionEffects, FunctionSignature, LibraryExport, LibraryModule,
-    LibraryParameter, LibraryRegistry, PropertySignature, ReceiverEffect, SemanticRefinement,
+    LibraryParameter, LibraryRegistry, ReceiverEffect, SemanticRefinement,
 };
 
 /// Resolve `Auto` from the source and build its deterministic library catalog.

@@ -141,11 +141,6 @@ impl FunctionSignature {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PropertySignature {
-    pub ty: RefinementType,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum LibraryExport {
     Value(RefinementType),
     Function(Vec<FunctionSignature>),
@@ -179,7 +174,7 @@ pub struct LibraryRegistry {
     globals: BTreeMap<String, RefinementType>,
     static_functions: BTreeMap<String, Vec<FunctionSignature>>,
     receiver_methods: BTreeMap<MemberKey, Vec<FunctionSignature>>,
-    receiver_properties: BTreeMap<MemberKey, PropertySignature>,
+    receiver_properties: BTreeMap<MemberKey, RefinementType>,
     receiver_supertypes: BTreeMap<String, BTreeSet<String>>,
     modules: BTreeMap<String, LibraryModule>,
     module_aliases: BTreeMap<String, String>,
@@ -222,7 +217,7 @@ impl LibraryRegistry {
             })
     }
 
-    pub fn receiver_property(&self, receiver: &str, member: &str) -> Option<&PropertySignature> {
+    pub fn receiver_property(&self, receiver: &str, member: &str) -> Option<&RefinementType> {
         self.receiver_lineage(receiver)
             .into_iter()
             .find_map(|receiver| {
@@ -275,7 +270,7 @@ impl LibraryRegistry {
         })
     }
 
-    pub fn receiver_properties(&self) -> impl Iterator<Item = (&str, &str, &PropertySignature)> {
+    pub fn receiver_properties(&self) -> impl Iterator<Item = (&str, &str, &RefinementType)> {
         self.receiver_properties
             .iter()
             .map(|(key, property)| (key.receiver.as_str(), key.member.as_str(), property))
@@ -310,7 +305,7 @@ impl LibraryRegistry {
         &mut self,
         receiver: &str,
         member: &str,
-        property: PropertySignature,
+        property: RefinementType,
     ) {
         let key = MemberKey::new(receiver, member);
         if let Some(previous) = self.receiver_properties.insert(key, property.clone()) {
