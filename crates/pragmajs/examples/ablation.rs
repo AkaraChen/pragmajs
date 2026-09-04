@@ -1,12 +1,13 @@
 //! Reproducible integration matrix for checker, compiler, and platform axes.
 
+use pragma_loc::utf16_offset_to_line_col;
 use pragma_own::Runtime;
 use pragma_parse::{parse, Allocator};
 use pragma_rt::prelude::Environment;
 use pragma_rt::type_provider::{
-    CompilerDiagnostic, CompilerDiagnosticKind, CompilerDiagnosticSeverity, CompilerRange,
-    CompilerTypeAnalysis, CompilerTypeAtOffset, CompilerTypeProvider, CompilerTypeProviderError,
-    CompilerTypeRequest,
+    utf16_offset_for_byte_offset, CompilerDiagnostic, CompilerDiagnosticKind,
+    CompilerDiagnosticSeverity, CompilerRange, CompilerTypeAnalysis, CompilerTypeAtOffset,
+    CompilerTypeProvider, CompilerTypeProviderError, CompilerTypeRequest,
 };
 use pragmajs::{
     check_parsed, check_parsed_with_compiler_provider, CheckOptions, CheckerSelection,
@@ -43,6 +44,39 @@ struct Cell {
     target: Environment,
     expected: Counts,
     expected_failed: bool,
+    expected_locations: Option<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ObservedDiagnostic {
+    pub message: String,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+impl ObservedDiagnostic {
+    fn without_location(message: String) -> Self {
+        Self {
+            message,
+            line: None,
+            column: None,
+        }
+    }
+
+    fn at(message: String, line: u32, column: u32) -> Self {
+        Self {
+            message,
+            line: Some(line),
+            column: Some(column),
+        }
+    }
+
+    fn render(&self) -> String {
+        match (self.line, self.column) {
+            (Some(line), Some(column)) => format!("{line}:{column}: {}", self.message),
+            _ => self.message.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -54,11 +88,11 @@ pub struct Observation {
     pub platform: String,
     pub runtime: String,
     pub target: String,
-    pub parse_diagnostics: Vec<String>,
-    pub own_diagnostics: Vec<String>,
-    pub rt_diagnostics: Vec<String>,
-    pub compiler_diagnostics: Vec<String>,
-    pub provider_errors: Vec<String>,
+    pub parse_diagnostics: Vec<ObservedDiagnostic>,
+    pub own_diagnostics: Vec<ObservedDiagnostic>,
+    pub rt_diagnostics: Vec<ObservedDiagnostic>,
+    pub compiler_diagnostics: Vec<ObservedDiagnostic>,
+    pub provider_errors: Vec<ObservedDiagnostic>,
     pub frontend_parse_count: usize,
     pub elapsed_micros: u128,
     pub combined_failed: bool,
@@ -74,6 +108,34 @@ impl Observation {
             compiler: self.compiler_diagnostics.len(),
             provider: self.provider_errors.len(),
         }
+    }
+
+    fn location_gold(&self) -> String {
+        fn producer(name: &str, diagnostics: &[ObservedDiagnostic]) -> Option<String> {
+            (!diagnostics.is_empty()).then(|| {
+                let locations = diagnostics
+                    .iter()
+                    .map(|diagnostic| match (diagnostic.line, diagnostic.column) {
+                        (Some(line), Some(column)) => format!("{line}:{column}"),
+                        _ => "?:?".to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{name}={locations}")
+            })
+        }
+
+        [
+            producer("parse", &self.parse_diagnostics),
+            producer("own", &self.own_diagnostics),
+            producer("rt", &self.rt_diagnostics),
+            producer("compiler", &self.compiler_diagnostics),
+            producer("provider", &self.provider_errors),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(";")
     }
 }
 
@@ -105,33 +167,41 @@ impl CompilerTypeProvider for FixtureProvider {
         let types = request
             .byte_offsets
             .iter()
-            .map(|byte_offset| CompilerTypeAtOffset {
-                byte_offset: *byte_offset,
-                utf16_offset: *byte_offset as u32,
-                rendered_type: rendered_type.map(str::to_string),
-                call_return_types: Vec::new(),
-                definition_paths: definition_offsets
-                    .contains(byte_offset)
-                    .then(|| "file:///typescript/lib/lib.es2025.d.ts".to_string())
-                    .into_iter()
-                    .collect(),
+            .map(|byte_offset| {
+                Ok(CompilerTypeAtOffset {
+                    byte_offset: *byte_offset,
+                    utf16_offset: utf16_offset_for_byte_offset(&request.source, *byte_offset)?,
+                    rendered_type: rendered_type.map(str::to_string),
+                    call_return_types: Vec::new(),
+                    definition_paths: definition_offsets
+                        .contains(byte_offset)
+                        .then(|| "file:///typescript/lib/lib.es2025.d.ts".to_string())
+                        .into_iter()
+                        .collect(),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, CompilerTypeProviderError>>()?;
         let diagnostics = request
             .source
             .find("@ablation-compiler-error")
-            .map(|offset| CompilerDiagnostic {
-                file: request.file_path.to_string_lossy().into_owned(),
-                kind: CompilerDiagnosticKind::Semantic,
-                severity: CompilerDiagnosticSeverity::Error,
-                code: Some("9999".to_string()),
-                source: Some("ablation-fixture".to_string()),
-                message: "deterministic compiler diagnostic".to_string(),
-                range: CompilerRange {
-                    start_utf16: offset as u32,
-                    end_utf16: (offset + "@ablation-compiler-error".len()) as u32,
-                },
+            .map(|offset| {
+                Ok(CompilerDiagnostic {
+                    file: request.file_path.to_string_lossy().into_owned(),
+                    kind: CompilerDiagnosticKind::Semantic,
+                    severity: CompilerDiagnosticSeverity::Error,
+                    code: Some("9999".to_string()),
+                    source: Some("ablation-fixture".to_string()),
+                    message: "deterministic compiler diagnostic".to_string(),
+                    range: CompilerRange {
+                        start_utf16: utf16_offset_for_byte_offset(&request.source, offset)?,
+                        end_utf16: utf16_offset_for_byte_offset(
+                            &request.source,
+                            offset + "@ablation-compiler-error".len(),
+                        )?,
+                    },
+                })
             })
+            .transpose()?
             .into_iter()
             .collect();
         Ok(CompilerTypeAnalysis { types, diagnostics })
@@ -203,9 +273,9 @@ fn load_cells() -> Result<Vec<Cell>, String> {
         }
         let line_number = index + 1;
         let fields = line.split('\t').collect::<Vec<_>>();
-        if fields.len() != 13 {
+        if !(13..=14).contains(&fields.len()) {
             return Err(format!(
-                "manifest line {line_number} has {} fields; expected 13",
+                "manifest line {line_number} has {} fields; expected 13 or 14",
                 fields.len()
             ));
         }
@@ -245,6 +315,7 @@ fn load_cells() -> Result<Vec<Cell>, String> {
             expected_failed: fields[12]
                 .parse()
                 .map_err(|_| format!("manifest line {line_number} has invalid failed boolean"))?,
+            expected_locations: fields.get(13).map(|value| (*value).to_string()),
         });
     }
     Ok(cells)
@@ -309,6 +380,7 @@ fn target_name(target: Environment) -> &'static str {
 
 fn observe_check(
     cell: &Cell,
+    source: &str,
     check: CombinedCheck,
     frontend_parse_count: usize,
     elapsed_micros: u128,
@@ -317,27 +389,45 @@ fn observe_check(
     let rt_diagnostics = check
         .refinement_diagnostics()
         .iter()
-        .map(|diagnostic| diagnostic.message.clone())
+        .map(|diagnostic| match &diagnostic.loc {
+            Some(location) => {
+                ObservedDiagnostic::at(diagnostic.message.clone(), location.line, location.column)
+            }
+            None => ObservedDiagnostic::without_location(diagnostic.message.clone()),
+        })
         .collect();
     let compiler_diagnostics = check
         .compiler_diagnostics
         .iter()
         .map(|diagnostic| {
-            format!(
+            let message = format!(
                 "{:?}:TS{}: {}",
                 diagnostic.kind,
                 diagnostic.code.as_deref().unwrap_or("?"),
                 diagnostic.message
-            )
+            );
+            let (line, column) = utf16_offset_to_line_col(source, diagnostic.range.start_utf16);
+            ObservedDiagnostic::at(message, line, column)
         })
         .collect();
     let own_diagnostics = check
         .own
         .diagnostics
         .iter()
-        .map(|diagnostic| format!("{}: {}", diagnostic.kind.slug(), diagnostic.message))
+        .map(|diagnostic| {
+            let (line, column) = diagnostic.line_col(source);
+            ObservedDiagnostic::at(
+                format!("{}: {}", diagnostic.kind.slug(), diagnostic.message),
+                line,
+                column,
+            )
+        })
         .collect();
-    let parse_diagnostics = check.parse_diagnostics;
+    let parse_diagnostics = check
+        .parse_diagnostics
+        .into_iter()
+        .map(ObservedDiagnostic::without_location)
+        .collect();
     observation(
         cell,
         parse_diagnostics,
@@ -354,11 +444,11 @@ fn observe_check(
 #[allow(clippy::too_many_arguments)]
 fn observation(
     cell: &Cell,
-    parse_diagnostics: Vec<String>,
-    own_diagnostics: Vec<String>,
-    rt_diagnostics: Vec<String>,
-    compiler_diagnostics: Vec<String>,
-    provider_errors: Vec<String>,
+    parse_diagnostics: Vec<ObservedDiagnostic>,
+    own_diagnostics: Vec<ObservedDiagnostic>,
+    rt_diagnostics: Vec<ObservedDiagnostic>,
+    compiler_diagnostics: Vec<ObservedDiagnostic>,
+    provider_errors: Vec<ObservedDiagnostic>,
     frontend_parse_count: usize,
     elapsed_micros: u128,
     combined_failed: bool,
@@ -391,7 +481,11 @@ fn observation(
         matches_gold: false,
     };
     observation.matches_gold = observation.counts() == cell.expected
-        && observation.combined_failed == cell.expected_failed;
+        && observation.combined_failed == cell.expected_failed
+        && cell
+            .expected_locations
+            .as_ref()
+            .is_none_or(|expected| observation.location_gold() == *expected);
     observation
 }
 
@@ -419,16 +513,23 @@ fn evaluate(cell: &Cell) -> Result<Observation, String> {
     };
     let elapsed_micros = started.elapsed().as_micros();
     match result {
-        Ok(check) => Ok(observe_check(cell, check, 1, elapsed_micros)),
+        Ok(check) => Ok(observe_check(cell, &source, check, 1, elapsed_micros)),
         Err(CombinedError::Compiler(error)) => {
             let root = fixture_root().to_string_lossy().into_owned();
             Ok(observation(
                 cell,
-                parsed.diagnostics.clone(),
+                parsed
+                    .diagnostics
+                    .iter()
+                    .cloned()
+                    .map(ObservedDiagnostic::without_location)
+                    .collect(),
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
-                vec![error.to_string().replace(&root, "<fixture-root>")],
+                vec![ObservedDiagnostic::without_location(
+                    error.to_string().replace(&root, "<fixture-root>"),
+                )],
                 1,
                 elapsed_micros,
                 true,
@@ -446,8 +547,12 @@ fn csv(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn details(values: &[String]) -> String {
-    values.join(" | ")
+fn details(values: &[ObservedDiagnostic]) -> String {
+    values
+        .iter()
+        .map(ObservedDiagnostic::render)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 pub fn render_csv(observations: &[Observation]) -> String {

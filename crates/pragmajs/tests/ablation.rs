@@ -13,7 +13,7 @@ fn named<'a>(observations: &'a [Observation], name: &str) -> &'a Observation {
 #[test]
 fn integration_matrix_matches_gold_and_keeps_producers_separate() {
     let observations = run_matrix().expect("integration matrix should run without Corsa");
-    assert_eq!(observations.len(), 24, "unexpected matrix size");
+    assert_eq!(observations.len(), 27, "unexpected matrix size");
     assert!(
         observations
             .iter()
@@ -56,7 +56,9 @@ fn integration_matrix_matches_gold_and_keeps_producers_separate() {
     let provider = named(&observations, "provider-all-explicit");
     assert_eq!(provider.provider_errors.len(), 1);
     assert!(provider.compiler_diagnostics.is_empty());
-    assert!(provider.provider_errors[0].contains("deterministic provider failure"));
+    assert!(provider.provider_errors[0]
+        .message
+        .contains("deterministic provider failure"));
 
     let compiler_off = named(&observations, "compiler-rt-off");
     let compiler_explicit = named(&observations, "compiler-rt-explicit");
@@ -77,11 +79,13 @@ fn matrix_exposes_compiler_evidence_and_independent_platform_axes() {
 
     let own_off = named(&observations, "sparse-own-off");
     let own_explicit = named(&observations, "sparse-own-explicit");
-    assert!(own_off.own_diagnostics[0].starts_with("missing-type:"));
+    assert!(own_off.own_diagnostics[0]
+        .message
+        .starts_with("missing-type:"));
     assert!(own_explicit
         .own_diagnostics
         .iter()
-        .all(|diagnostic| !diagnostic.starts_with("missing-type:")));
+        .all(|diagnostic| !diagnostic.message.starts_with("missing-type:")));
 
     let node_node = named(&observations, "platform-node-node");
     let bun_node = named(&observations, "platform-bun-node");
@@ -91,7 +95,9 @@ fn matrix_exposes_compiler_evidence_and_independent_platform_axes() {
     assert_eq!(bun_node.own_diagnostics.len(), 1);
     assert_eq!(node_bun.own_diagnostics.len(), 0);
     assert_eq!(bun_bun.own_diagnostics.len(), 1);
-    assert!(node_node.rt_diagnostics[0].contains("No static type information"));
+    assert!(node_node.rt_diagnostics[0]
+        .message
+        .contains("No static type information"));
     assert!(node_bun.rt_diagnostics.is_empty());
     assert!(bun_bun.rt_diagnostics.is_empty());
 
@@ -110,8 +116,36 @@ fn matrix_exposes_compiler_evidence_and_independent_platform_axes() {
 
     let profile_bun = named(&observations, "profile-bun");
     assert_eq!(profile_bun.own_diagnostics.len(), 1);
-    assert!(profile_bun.own_diagnostics[0].starts_with("unique-forget:"));
+    assert!(profile_bun.own_diagnostics[0]
+        .message
+        .starts_with("unique-forget:"));
     assert!(profile_bun.rt_diagnostics.is_empty());
+}
+
+#[test]
+fn unicode_cells_gold_check_scalar_locations_from_every_structured_producer() {
+    let observations = run_matrix().expect("integration matrix should run without Corsa");
+
+    let own = named(&observations, "unicode-own-off");
+    assert_eq!(
+        (own.own_diagnostics[0].line, own.own_diagnostics[0].column),
+        (Some(1), Some(75))
+    );
+
+    let rt = named(&observations, "unicode-rt-off");
+    assert_eq!(
+        (rt.rt_diagnostics[0].line, rt.rt_diagnostics[0].column),
+        (Some(2), Some(87))
+    );
+
+    let compiler = named(&observations, "unicode-compiler-explicit");
+    assert_eq!(
+        (
+            compiler.compiler_diagnostics[0].line,
+            compiler.compiler_diagnostics[0].column,
+        ),
+        (Some(3), Some(10))
+    );
 }
 
 #[test]

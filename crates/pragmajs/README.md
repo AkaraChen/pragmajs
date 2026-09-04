@@ -45,7 +45,12 @@ cargo run -p pragmajs --example ablation
 
 Its gold manifest covers `own`/`rt`/`all`, compiler off/auto/explicit-provider
 paths, sparse compiler evidence, all five coherent platform profiles, and the
-original Bun ownership-runtime × refinement-target mismatch controls. CSV
-output keeps parse, ownership, refinement, compiler, and provider diagnostics
-in separate columns instead of reducing a cell to the CLI exit code; it also
-records the frontend parse count and per-cell wall time.
+original Bun ownership-runtime × refinement-target mismatch controls. Unicode
+cells put `🙂` before findings from each producer and gold-check their exact
+1-based Unicode-scalar `line:column`, so a byte/scalar/code-unit regression
+fails the runner instead of merely changing its text output. CSV output keeps
+parse, ownership, refinement, compiler, and provider diagnostics (including
+available locations) in separate columns instead of reducing a cell to the CLI
+exit code; it also records the frontend parse count and per-cell wall time.
+Frontend parse diagnostics remain message-only because `pragma-parse`
+currently exposes them as formatted strings rather than structured spans.

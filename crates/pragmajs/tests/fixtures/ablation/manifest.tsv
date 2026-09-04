@@ -1,4 +1,4 @@
-# name	fixture	checker	compiler	platform	runtime	target	parse	own	rt	compiler diagnostics	provider errors	combined failed
+# name	fixture	checker	compiler	platform	runtime	target	parse	own	rt	compiler diagnostics	provider errors	combined failed	optional location gold
 cross-own-off	cross-checker.js	own	off	-	none	ecmascript	0	1	0	0	0	true
 cross-rt-off	cross-checker.js	rt	off	-	none	ecmascript	0	0	1	0	0	true
 cross-all-off	cross-checker.js	all	off	-	none	ecmascript	0	1	1	0	0	true
@@ -23,3 +23,6 @@ profile-browser	platform-bun.js	all	off	browser	-	-	0	0	1	0	0	true
 profile-node	platform-bun.js	all	off	node	-	-	0	0	1	0	0	true
 profile-deno	platform-bun.js	all	off	deno	-	-	0	0	1	0	0	true
 profile-bun	platform-bun.js	all	off	bun	-	-	0	1	0	0	0	true
+unicode-own-off	unicode-locations.js	own	off	-	none	ecmascript	0	1	0	0	0	true	own=1:75
+unicode-rt-off	unicode-locations.js	rt	off	-	none	ecmascript	0	0	1	0	0	true	rt=2:87
+unicode-compiler-explicit	unicode-locations.js	all	explicit	-	none	ecmascript	0	1	0	1	0	true	own=1:75;compiler=3:10
