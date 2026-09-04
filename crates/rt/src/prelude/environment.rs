@@ -1,6 +1,7 @@
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ExportAllDeclaration, ExportFromDeclaration, Expression, ImportDeclaration, ImportExpression,
+    Program,
 };
 use oxc_ast_visit::{
     Visit,
@@ -9,9 +10,7 @@ use oxc_ast_visit::{
         walk_import_expression,
     },
 };
-use oxc_parser::{ParseOptions, Parser};
-use oxc_semantic::SemanticBuilder;
-use oxc_span::SourceType;
+use pragma_parse::{parse, semantic_graph, unresolved_root_names};
 use std::{collections::BTreeSet, error::Error, fmt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -120,31 +119,26 @@ impl Error for EnvironmentError {}
 
 /// Detect a single runtime using syntax-aware import and unbound-global
 /// evidence. Node compatibility markers are accepted inside Deno and Bun.
-pub fn detect_environment(source: &str) -> Result<Environment, EnvironmentError> {
+pub fn detect_environment(source: &str, file_name: &str) -> Result<Environment, EnvironmentError> {
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, SourceType::default().with_module(true))
-        .with_options(ParseOptions::default())
-        .parse();
+    let parsed = parse(&allocator, file_name, source);
     if !parsed.diagnostics.is_empty() {
         return Err(EnvironmentError::Parse {
-            diagnostics: parsed
-                .diagnostics
-                .iter()
-                .map(|diagnostic| format!("{diagnostic:?}"))
-                .collect(),
+            diagnostics: parsed.diagnostics,
         });
     }
+    detect_environment_from_program(&parsed.program)
+}
 
+/// Detect a runtime from a program already produced by `pragma_parse`.
+pub fn detect_environment_from_program(
+    program: &Program<'_>,
+) -> Result<Environment, EnvironmentError> {
     let mut imports = ModuleSourceCollector::default();
-    imports.visit_program(&parsed.program);
+    imports.visit_program(program);
 
-    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
-    let globals: BTreeSet<String> = semantic
-        .scoping()
-        .root_unresolved_references()
-        .keys()
-        .map(|name| name.to_string())
-        .collect();
+    let semantic = semantic_graph(program);
+    let globals: BTreeSet<String> = unresolved_root_names(&semantic).into_iter().collect();
 
     let mut evidence = BTreeSet::new();
     for specifier in imports.sources {

@@ -1,0 +1,15 @@
+[package]
+name = "pragmajs"
+version = "0.1.0"
+edition = "2021"
+description = "Unified CLI for pragma-own and pragma-rt: parse once, check both"
+license = "MIT"
+
+[[bin]]
+name = "pragmajs"
+path = "src/main.rs"
+
+[dependencies]
+pragma-own = { path = "../own" }
+pragma-parse = { path = "../parse" }
+pragma-rt = { path = "../rt" }

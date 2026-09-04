@@ -1,0 +1,13 @@
+[package]
+name = "pragma-corsa"
+version = "0.1.0"
+edition = "2021"
+description = "Shared Corsa TypeScript type queries for pragma-rt"
+license = "MIT"
+
+[dependencies]
+corsa = "=1.12.4"
+pragma-parse = { path = "../parse" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"

@@ -3,8 +3,9 @@ use oxc_allocator::Allocator;
 use oxc_ast::ast::{BindingPattern, CommentPosition, Expression, Program, Statement};
 use oxc_ast_visit::Visit;
 use oxc_ast_visit::walk::walk_statement;
-use oxc_parser::{ParseOptions, Parser, ParserReturn};
-use oxc_span::{SourceType, Span};
+use oxc_span::Span;
+use pragma_loc::offset_to_line_col;
+use pragma_parse::parse;
 
 #[derive(Debug, Clone, PartialEq)]
 enum TokenKind {
@@ -794,18 +795,23 @@ pub struct ParseResult {
 
 pub fn parse_file(source: &str, file_name: &str) -> Result<ParseResult, String> {
     let allocator = Allocator::default();
-    let source_type = SourceType::default().with_module(true);
-    let ret: ParserReturn<'_> = Parser::new(&allocator, source, source_type)
-        .with_options(ParseOptions::default())
-        .parse();
+    let parsed = parse(&allocator, file_name, source);
 
-    if !ret.diagnostics.is_empty() {
-        return Err(format!("Parse errors: {:?}", ret.diagnostics));
+    if !parsed.diagnostics.is_empty() {
+        return Err(format!("Parse errors: {:?}", parsed.diagnostics));
     }
 
-    let program = ret.program;
+    annotations_from_program(source, file_name, &parsed.program)
+}
+
+/// Collect `/*#rt` annotations from a program already produced by `pragma_parse`.
+pub fn annotations_from_program(
+    source: &str,
+    file_name: &str,
+    program: &Program<'_>,
+) -> Result<ParseResult, String> {
     let mut collector = SpanCollector::new();
-    collector.visit_program(&program);
+    collector.visit_program(program);
 
     let mut annotations = Vec::new();
 
@@ -830,7 +836,7 @@ pub fn parse_file(source: &str, file_name: &str) -> Result<ParseResult, String> 
         }
 
         let Some(info) = best else { continue };
-        let (line, column) = offset_to_line_column(source, comment.span.start);
+        let (line, column) = offset_to_line_col(source, comment.span.start);
         let loc = SourceLocation {
             file: Some(file_name.to_string()),
             line,
@@ -954,23 +960,6 @@ impl SpanCollector {
     fn add(&mut self, span: Span, target: Option<NodeTarget>) {
         self.spans.push(SpanInfo { span, target });
     }
-}
-
-fn offset_to_line_column(source: &str, offset: u32) -> (u32, u32) {
-    let mut line = 1;
-    let mut column = 1;
-    for (i, ch) in source.char_indices() {
-        if i >= offset as usize {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    (line, column)
 }
 
 impl<'a> Visit<'a> for SpanCollector {

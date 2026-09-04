@@ -1,0 +1,6 @@
+[package]
+name = "pragma-loc"
+version = "0.1.0"
+edition = "2021"
+description = "UTF-8 byte offset to 1-based line/column"
+license = "MIT"

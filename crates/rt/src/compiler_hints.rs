@@ -15,8 +15,8 @@ use oxc_ast_visit::{
     Visit,
     walk::{walk_expression, walk_variable_declarator},
 };
-use oxc_parser::{ParseOptions, Parser};
-use oxc_span::{GetSpan, SourceType, Span};
+use oxc_span::{GetSpan, Span};
+use pragma_parse::parse;
 
 use crate::{
     syntax::BaseType,
@@ -65,7 +65,39 @@ pub fn analyze_source(
     config_path: &Path,
     file_path: &Path,
 ) -> Result<CompilerHints, CompilerTypeProviderError> {
-    let plan = CompilerQueryPlan::from_source(source, file_path);
+    finish_analysis(
+        provider,
+        source,
+        config_path,
+        file_path,
+        CompilerQueryPlan::from_source(source, file_path),
+    )
+}
+
+/// Like [`analyze_source`], using a program already produced by `pragma_parse`.
+pub fn analyze_program(
+    provider: &dyn CompilerTypeProvider,
+    source: &str,
+    program: &Program<'_>,
+    config_path: &Path,
+    file_path: &Path,
+) -> Result<CompilerHints, CompilerTypeProviderError> {
+    finish_analysis(
+        provider,
+        source,
+        config_path,
+        file_path,
+        CompilerQueryPlan::from_program(program),
+    )
+}
+
+fn finish_analysis(
+    provider: &dyn CompilerTypeProvider,
+    source: &str,
+    config_path: &Path,
+    file_path: &Path,
+    plan: CompilerQueryPlan,
+) -> Result<CompilerHints, CompilerTypeProviderError> {
     let analysis = provider.analyze(&CompilerTypeRequest {
         config_path: config_path.to_path_buf(),
         file_path: file_path.to_path_buf(),
@@ -156,12 +188,8 @@ struct CompilerQueryPlan {
 impl CompilerQueryPlan {
     fn from_source(source: &str, file_path: &Path) -> Self {
         let allocator = Allocator::default();
-        let source_type = SourceType::from_path(file_path)
-            .unwrap_or_else(|_| SourceType::default())
-            .with_module(true);
-        let parsed = Parser::new(&allocator, source, source_type)
-            .with_options(ParseOptions::default())
-            .parse();
+        let name = file_path.to_str().unwrap_or("file.js");
+        let parsed = parse(&allocator, name, source);
         Self::from_program(&parsed.program)
     }
 

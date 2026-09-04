@@ -11,24 +11,26 @@
 ## 安装
 
 ```bash
-cargo install --path crates/own
+cargo install --path crates/pragmajs
 ```
 
 或在仓库根目录：
 
 ```bash
-cargo run -p pragma-own -- --check crates/own/examples/
+cargo run -p pragmajs -- check crates/own/examples/
 cargo test -p pragma-own
 ```
 
 ## 用法
 
+统一 CLI 是 `pragmajs`。所有权检查走 `--runtime`；同一条 `check` 也会跑 `/*#rt`。
+
 ```bash
-pragma-own --check path/to/file.js
-pragma-own --check crates/own/examples/
-pragma-own --check --runtime none crates/own/examples/ok-prelude-console.js
-pragma-own --check --runtime bun file.js
-pragma-own --check --runtime deno file.js
+pragmajs check path/to/file.js
+pragmajs check crates/own/examples/
+pragmajs check --runtime none crates/own/examples/ok-prelude-console.js
+pragmajs check --runtime bun file.js
+pragmajs check --runtime deno file.js
 ```
 
 `--runtime` / `-r` 选择内置函数 prelude：`node`（默认）、`bun`、`deno`、`none`（不带）。签名来自 Corsa/tsgo 对 `@types/node` / `bun-types` / Deno dts 的盘点（`scripts/gen-prelude.cjs`），包括实例方法（`Buffer#toString`、`FileHandle#close`）。`buf.toString()` 按绑定上的类型名查找。文件里的 `/*#own type:` 会覆盖 prelude。
@@ -139,8 +141,8 @@ write(/*#own &mut */ buf);
 | `ok-prelude-buffer-tostring.js` / `ok-prelude-handle-close.js` | 实例方法：`Buffer#toString` 不消费；`FileHandle#close` 消费 this |
 
 ```bash
-cargo run -p pragma-own -- --check examples/ok-unique-move.js    # exit 0
-cargo run -p pragma-own -- --check examples/err-unique-forget.js # error[unique-forget]
+cargo run -p pragmajs -- check examples/ok-unique-move.js    # exit 0
+cargo run -p pragmajs -- check examples/err-unique-forget.js # error[unique-forget]
 ```
 
 ## Playground

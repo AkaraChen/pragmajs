@@ -9,6 +9,7 @@ mod model;
 
 pub use environment::{
     Environment, EnvironmentError, EnvironmentEvidence, EvidenceKind, detect_environment,
+    detect_environment_from_program,
 };
 pub use model::{
     CallbackTiming, CallbackUse, FunctionEffects, FunctionSignature, LibraryExport, LibraryModule,
@@ -20,9 +21,22 @@ pub use model::{
 pub fn registry_for_source(
     requested: Environment,
     source: &str,
+    file_name: &str,
 ) -> Result<LibraryRegistry, EnvironmentError> {
     let environment = match requested {
-        Environment::Auto => detect_environment(source)?,
+        Environment::Auto => detect_environment(source, file_name)?,
+        environment => environment,
+    };
+    Ok(catalog::build(environment))
+}
+
+/// Like [`registry_for_source`], using a program already produced by `pragma_parse`.
+pub fn registry_for_program(
+    requested: Environment,
+    program: &pragma_parse::Program<'_>,
+) -> Result<LibraryRegistry, EnvironmentError> {
+    let environment = match requested {
+        Environment::Auto => detect_environment_from_program(program)?,
         environment => environment,
     };
     Ok(catalog::build(environment))

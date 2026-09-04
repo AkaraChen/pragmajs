@@ -2,9 +2,10 @@
 
 `pragmajs` 里的 refinement-type 检查器（原 refinejs）。
 
-Flux-style refinement types for JavaScript. `pragma-rt check` statically proves
-liquid-type obligations with Z3; `pragma-rt build` additionally preserves the
-existing `__rt.assert` runtime checks in the emitted JavaScript.
+Flux-style refinement types for JavaScript. `pragmajs check` statically proves
+liquid-type obligations with Z3; `pragmajs build` additionally preserves the
+existing `__rt.assert` runtime checks in the emitted JavaScript. The `pragma-rt`
+crate is the checker library; the CLI lives in `pragmajs`.
 
 ## Syntax
 
@@ -50,8 +51,8 @@ A Z3 `unknown` result is a failure, not a proof.
 From the workspace root:
 
 ```bash
-cargo run -p pragma-rt -- check --target auto crates/rt/fixtures/sqrt.js
-cargo run -p pragma-rt -- build --target ecmascript crates/rt/fixtures/sqrt.js output.js
+cargo run -p pragmajs -- check --target auto crates/rt/fixtures/sqrt.js
+cargo run -p pragmajs -- build --target ecmascript crates/rt/fixtures/sqrt.js output.js
 ```
 
 `--target` selects the refinement-aware standard prelude: `auto`,
@@ -62,11 +63,11 @@ Compiler-backed library types (Corsa + tsconfig) are documented in
 
 ## Playground
 
-Static snapshots under `playground/` (`pragma-rt check --target ecmascript`).
+Static snapshots under `playground/` (`pragmajs check --target ecmascript`).
 Regenerate after checker or fixture changes:
 
 ```bash
-cargo build -p pragma-rt
+cargo build -p pragmajs
 node crates/rt/playground/generate.mjs
 ```
 

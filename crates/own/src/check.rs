@@ -1,33 +1,25 @@
 //! Austral-style linearity / borrow checker over an oxc AST.
 
-use crate::annot::{
-    parse_own_comment, AttachedOwn, BorrowMode, FnSig, OwnDirective, OwnType,
-};
+use crate::annot::{parse_own_comment, AttachedOwn, BorrowMode, FnSig, OwnDirective, OwnType};
 use crate::{Diagnostic, RuleKind};
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     ArrowFunctionBody, ArrowFunctionExpression, BindingPattern, CallExpression, Expression,
-    ForStatementInit, Function, FunctionBody, LogicalOperator, Program, Statement, UnaryOperator,
+    ForStatementInit, Function, FunctionBody, LogicalOperator, Statement, UnaryOperator,
     VariableDeclaration,
 };
-use oxc::parser::Parser;
-use oxc::span::{GetSpan, SourceType};
+use oxc::span::GetSpan;
+use pragma_parse::{parse, Program};
 use std::collections::{HashMap, HashSet};
 
 pub fn check_source(filename: &str, source: &str, runtime: crate::Runtime) -> Vec<Diagnostic> {
     let allocator = Allocator::new();
-    let source_type = SourceType::from_path(filename).unwrap_or_else(|_| {
-        if filename.ends_with(".ts") || filename.ends_with(".tsx") || filename.ends_with(".mts") {
-            SourceType::ts()
-        } else {
-            SourceType::mjs()
-        }
-    });
-    let ret = Parser::new(&allocator, source, source_type).parse();
-    check_program(filename, source, &ret.program, runtime)
+    let parsed = parse(&allocator, filename, source);
+    check_program(filename, source, &parsed.program, runtime)
 }
 
-fn check_program(
+/// Check a program that has already been parsed with `pragma_parse`.
+pub fn check_program(
     path: &str,
     source: &str,
     program: &Program<'_>,
@@ -139,9 +131,7 @@ impl FileCtx<'_> {
             Statement::ForStatement(f) => {
                 if let Some(init) = &f.init {
                     match init {
-                        ForStatementInit::VariableDeclaration(v) => {
-                            self.collect_var(v, None)
-                        }
+                        ForStatementInit::VariableDeclaration(v) => self.collect_var(v, None),
                         other => {
                             if let Some(e) = other.as_expression() {
                                 self.collect_sigs_expr(e);
@@ -259,9 +249,7 @@ impl FileCtx<'_> {
             oxc::ast::ast::Declaration::FunctionDeclaration(f) => self.collect_fn(f, extra),
             oxc::ast::ast::Declaration::ClassDeclaration(c) => self.collect_class(c, None),
             oxc::ast::ast::Declaration::VariableDeclaration(v) => self.collect_var(v, extra),
-            oxc::ast::ast::Declaration::TSNamespaceDeclaration(n) => {
-                self.collect_sigs_namespace(n)
-            }
+            oxc::ast::ast::Declaration::TSNamespaceDeclaration(n) => self.collect_sigs_namespace(n),
             oxc::ast::ast::Declaration::TSGlobalDeclaration(g) => {
                 for s in &g.body.body {
                     self.collect_sigs_stmt(s, None);
@@ -275,9 +263,7 @@ impl FileCtx<'_> {
                 }
             }
             oxc::ast::ast::Declaration::TSEnumDeclaration(e) => self.collect_sigs_enum(e),
-            oxc::ast::ast::Declaration::TSInterfaceDeclaration(i) => {
-                self.collect_sigs_interface(i)
-            }
+            oxc::ast::ast::Declaration::TSInterfaceDeclaration(i) => self.collect_sigs_interface(i),
             oxc::ast::ast::Declaration::TSTypeAliasDeclaration(t) => {
                 self.collect_sigs_type_alias(t)
             }
@@ -316,7 +302,8 @@ impl FileCtx<'_> {
                 let n = name.as_str().to_string();
                 self.sigs.insert(n.clone(), sig.clone());
                 if !self.ns_prefix.is_empty() {
-                    self.sigs.insert(format!("{}.{n}", self.ns_prefix.join(".")), sig);
+                    self.sigs
+                        .insert(format!("{}.{n}", self.ns_prefix.join(".")), sig);
                 }
             }
         }
@@ -932,9 +919,7 @@ impl FileCtx<'_> {
                     self.collect_ts_type_args(ta);
                 }
             }
-            oxc::ast::ast::TSType::JSDocNullableType(t) => {
-                self.collect_ts_type(&t.type_annotation)
-            }
+            oxc::ast::ast::TSType::JSDocNullableType(t) => self.collect_ts_type(&t.type_annotation),
             oxc::ast::ast::TSType::JSDocNonNullableType(t) => {
                 self.collect_ts_type(&t.type_annotation)
             }
@@ -1034,8 +1019,7 @@ impl FileCtx<'_> {
             if is_static {
                 self.sigs.insert(format!("{cname}.{meth}"), sig);
             } else {
-                self.sigs
-                    .insert(format!("{cname}#{meth}"), sig.clone());
+                self.sigs.insert(format!("{cname}#{meth}"), sig.clone());
                 self.sigs.insert(format!("{cname}.{meth}"), sig);
             }
         }
@@ -1178,7 +1162,11 @@ impl FileCtx<'_> {
         }
     }
 
-    fn collect_iter_binding_object_methods(&mut self, pat: &BindingPattern<'_>, rhs: &Expression<'_>) {
+    fn collect_iter_binding_object_methods(
+        &mut self,
+        pat: &BindingPattern<'_>,
+        rhs: &Expression<'_>,
+    ) {
         match peel(rhs) {
             Expression::ArrayExpression(arr) => {
                 for el in &arr.elements {
@@ -1281,11 +1269,7 @@ impl FileCtx<'_> {
         self.collect_binding_object_methods(pat, &p.value);
     }
 
-    fn collect_object_prop_into_name(
-        &mut self,
-        name: &str,
-        p: &oxc::ast::ast::ObjectProperty<'_>,
-    ) {
+    fn collect_object_prop_into_name(&mut self, name: &str, p: &oxc::ast::ast::ObjectProperty<'_>) {
         let mut offs = vec![p.span.start, p.value.span().start];
         if let oxc::ast::ast::PropertyKey::StaticIdentifier(id) = &p.key {
             offs.push(id.span.start);
@@ -2372,10 +2356,7 @@ impl Checker<'_> {
                     e.read_borrows = e.read_borrows.saturating_sub(1);
                     if e.read_borrows == 0
                         && e.write_borrows == 0
-                        && matches!(
-                            e.state,
-                            VarState::BorrowedRead | VarState::BorrowedWrite
-                        )
+                        && matches!(e.state, VarState::BorrowedRead | VarState::BorrowedWrite)
                     {
                         e.state = VarState::Unconsumed;
                     }
@@ -2384,10 +2365,7 @@ impl Checker<'_> {
                     e.write_borrows = e.write_borrows.saturating_sub(1);
                     if e.read_borrows == 0
                         && e.write_borrows == 0
-                        && matches!(
-                            e.state,
-                            VarState::BorrowedRead | VarState::BorrowedWrite
-                        )
+                        && matches!(e.state, VarState::BorrowedRead | VarState::BorrowedWrite)
                     {
                         e.state = VarState::Unconsumed;
                     }
@@ -2606,7 +2584,10 @@ impl Checker<'_> {
                     }
                     if let Some(saved) = exiting.as_ref() {
                         if saved.iter().any(|(n, e)| {
-                            fallthrough.get(n).map(|f| f.state != e.state).unwrap_or(false)
+                            fallthrough
+                                .get(n)
+                                .map(|f| f.state != e.state)
+                                .unwrap_or(false)
                         }) {
                             self.tbl = fallthrough;
                             self.push_scope();
@@ -2631,25 +2612,23 @@ impl Checker<'_> {
             }
             Statement::LabeledStatement(l) => self.check_stmt(&l.body),
             Statement::ExportDeclaration(e) => self.check_decl(&e.declaration, e.span.start),
-            Statement::ExportDefaultDeclaration(e) => {
-                match &e.declaration {
-                    oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(f)
-                    | oxc::ast::ast::ExportDefaultDeclarationKind::FunctionExpression(f) => {
-                        self.check_function(f, &[f.span.start, e.span.start]);
-                    }
-                    oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(c)
-                    | oxc::ast::ast::ExportDefaultDeclarationKind::ClassExpression(c) => {
-                        self.check_class(c);
-                    }
-                    other => {
-                        if let Some(expr) = other.as_expression() {
-                            self.check_fn_or_arrow_init(expr, &[e.span.start, expr.span().start]);
-                            self.check_expr(expr, expr.span().start);
-                            self.check_discard(expr);
-                        }
+            Statement::ExportDefaultDeclaration(e) => match &e.declaration {
+                oxc::ast::ast::ExportDefaultDeclarationKind::FunctionDeclaration(f)
+                | oxc::ast::ast::ExportDefaultDeclarationKind::FunctionExpression(f) => {
+                    self.check_function(f, &[f.span.start, e.span.start]);
+                }
+                oxc::ast::ast::ExportDefaultDeclarationKind::ClassDeclaration(c)
+                | oxc::ast::ast::ExportDefaultDeclarationKind::ClassExpression(c) => {
+                    self.check_class(c);
+                }
+                other => {
+                    if let Some(expr) = other.as_expression() {
+                        self.check_fn_or_arrow_init(expr, &[e.span.start, expr.span().start]);
+                        self.check_expr(expr, expr.span().start);
+                        self.check_discard(expr);
                     }
                 }
-            }
+            },
             Statement::TSEnumDeclaration(e) => self.check_ts_enum(e),
             Statement::TSNamespaceDeclaration(n) => self.check_ts_namespace(n),
             Statement::TSGlobalDeclaration(g) => self.check_ts_module_block(&g.body),
@@ -2675,9 +2654,7 @@ impl Checker<'_> {
 
     fn check_for_left(&mut self, left: &oxc::ast::ast::ForStatementLeft<'_>) {
         match left {
-            oxc::ast::ast::ForStatementLeft::VariableDeclaration(v) => {
-                self.check_var_decl(v, None)
-            }
+            oxc::ast::ast::ForStatementLeft::VariableDeclaration(v) => self.check_var_decl(v, None),
             other => {
                 if let Some(t) = other.as_assignment_target() {
                     self.check_expr_assignment_target(t);
@@ -2874,10 +2851,7 @@ impl Checker<'_> {
                     self.force_consume(&name, start);
                 }
                 OwnDirective::Borrow {
-                    owner,
-                    alias,
-                    mode,
-                    ..
+                    owner, alias, mode, ..
                 } => {
                     self.begin_borrow(&owner, &alias, mode, start);
                 }
@@ -2980,10 +2954,7 @@ impl Checker<'_> {
             let name = ident_of_pattern(&d.id);
             let borrow = dirs.iter().find_map(|x| match x {
                 OwnDirective::Borrow {
-                    owner,
-                    alias,
-                    mode,
-                    ..
+                    owner, alias, mode, ..
                 } => Some((owner.clone(), alias.clone(), *mode)),
                 _ => None,
             });
@@ -3022,7 +2993,9 @@ impl Checker<'_> {
                 }
                 self.check_fn_or_arrow_init(init, &init_offs);
                 let src_name = ident_move_src(init);
-                let src_kind = src_name.as_ref().and_then(|n| self.tbl.get(n).map(|e| e.kind));
+                let src_kind = src_name
+                    .as_ref()
+                    .and_then(|n| self.tbl.get(n).map(|e| e.kind));
                 self.check_expr(init, init.span().start);
                 self.discard_sequence_prefix(init);
                 if let Some(n) = &name {
@@ -3204,9 +3177,7 @@ impl Checker<'_> {
             .params
             .items
             .iter()
-            .filter_map(|p| {
-                ident_of_pattern(&p.pattern).map(|n| (n, p.span.start))
-            })
+            .filter_map(|p| ident_of_pattern(&p.pattern).map(|n| (n, p.span.start)))
             .collect();
         if func.body.is_some() {
             for (i, (pname, pspan)) in params.iter().enumerate() {
@@ -3588,9 +3559,11 @@ impl Checker<'_> {
         {
             let offset = expr.span().start;
             let msg = "unique value discarded without being bound or consumed";
-            if !self.diags.iter().any(|d| {
-                d.offset == offset && d.kind == RuleKind::UniqueForget && d.message == msg
-            }) {
+            if !self
+                .diags
+                .iter()
+                .any(|d| d.offset == offset && d.kind == RuleKind::UniqueForget && d.message == msg)
+            {
                 self.emit(offset, RuleKind::UniqueForget, msg);
             }
         }
@@ -3914,7 +3887,9 @@ impl Checker<'_> {
                 self.check_returned_unique(&a.right);
                 return;
             }
-            Expression::ConditionalExpression(c) if matches!(self.fn_ret, Some(OwnType::Unique(_))) => {
+            Expression::ConditionalExpression(c)
+                if matches!(self.fn_ret, Some(OwnType::Unique(_))) =>
+            {
                 self.check_discard(&c.test);
                 self.check_returned_unique(&c.consequent);
                 self.check_returned_unique(&c.alternate);
@@ -4015,7 +3990,10 @@ impl Checker<'_> {
                 return self.file.type_sig_at(&offs).map(|s| s.ret.clone());
             }
             Expression::ArrowFunctionExpression(a) => {
-                return self.file.type_sig_at(&[a.span.start]).map(|s| s.ret.clone());
+                return self
+                    .file
+                    .type_sig_at(&[a.span.start])
+                    .map(|s| s.ret.clone());
             }
             _ => None,
         }
@@ -4027,9 +4005,7 @@ impl Checker<'_> {
             Expression::StaticMemberExpression(m) => {
                 (&m.object, m.property.name.as_str().to_string())
             }
-            Expression::ComputedMemberExpression(m) => {
-                (&m.object, string_prop_key(&m.expression)?)
-            }
+            Expression::ComputedMemberExpression(m) => (&m.object, string_prop_key(&m.expression)?),
             _ => return None,
         };
         let (recv, ty) = if let Some(recv) = ident_name(object).or_else(|| ident_move_src(object)) {
@@ -4094,12 +4070,7 @@ impl Checker<'_> {
                 let saved = self.tbl.clone();
                 self.check_expr(&b.right, b.right.span().start);
                 let after_right = self.tbl.clone();
-                self.tables_consistent(
-                    "a logical expression",
-                    &saved,
-                    &after_right,
-                    span,
-                );
+                self.tables_consistent("a logical expression", &saved, &after_right, span);
                 self.tbl = after_right;
                 return;
             }
@@ -4111,12 +4082,7 @@ impl Checker<'_> {
                 self.tbl = saved;
                 self.check_expr(&c.alternate, c.alternate.span().start);
                 let else_tbl = self.tbl.clone();
-                self.tables_consistent(
-                    "a conditional expression",
-                    &then_tbl,
-                    &else_tbl,
-                    span,
-                );
+                self.tables_consistent("a conditional expression", &then_tbl, &else_tbl, span);
                 self.tbl = then_tbl;
                 return;
             }
@@ -4161,7 +4127,8 @@ impl Checker<'_> {
                 }
             }
             Expression::StaticMemberExpression(m) => {
-                if m.property.name.as_str() == "__proto__" || m.property.name.as_str() == "prototype"
+                if m.property.name.as_str() == "__proto__"
+                    || m.property.name.as_str() == "prototype"
                 {
                     if let Some(n) = ident_name(&m.object) {
                         if self.tbl.contains_key(&n) {
@@ -4188,7 +4155,9 @@ impl Checker<'_> {
                             self.emit(
                                 m.span.start,
                                 RuleKind::UnmappedConstruct,
-                                format!("computed property access on owned value `{n}` is not mapped"),
+                                format!(
+                                    "computed property access on owned value `{n}` is not mapped"
+                                ),
                             );
                         }
                     }
@@ -4237,9 +4206,7 @@ impl Checker<'_> {
                     }
                 }
             }
-            Expression::ParenthesizedExpression(p) => {
-                self.check_nested_fn_captures(&p.expression)
-            }
+            Expression::ParenthesizedExpression(p) => self.check_nested_fn_captures(&p.expression),
             Expression::AwaitExpression(a) => self.check_nested_fn_captures(&a.argument),
             Expression::UnaryExpression(u) => self.check_nested_fn_captures(&u.argument),
             Expression::AssignmentExpression(a) => self.check_nested_fn_captures(&a.right),
@@ -4453,9 +4420,7 @@ impl Checker<'_> {
                 let offset = expr.span().start;
                 let msg = format!("nested function capturing owned value `{n}` is not mapped");
                 if !self.diags.iter().any(|d| {
-                    d.offset == offset
-                        && d.kind == RuleKind::UnmappedConstruct
-                        && d.message == msg
+                    d.offset == offset && d.kind == RuleKind::UnmappedConstruct && d.message == msg
                 }) {
                     self.emit(offset, RuleKind::UnmappedConstruct, msg);
                 }
@@ -4954,11 +4919,7 @@ impl Checker<'_> {
         }
     }
 
-    fn count_assignment_target(
-        &self,
-        t: &oxc::ast::ast::AssignmentTarget<'_>,
-        name: &str,
-    ) -> Apps {
+    fn count_assignment_target(&self, t: &oxc::ast::ast::AssignmentTarget<'_>, name: &str) -> Apps {
         match t {
             oxc::ast::ast::AssignmentTarget::ComputedMemberExpression(m) => {
                 let head = if ident_name(&m.object).as_deref() == Some(name) {
@@ -5030,11 +4991,7 @@ impl Checker<'_> {
         }
     }
 
-    fn count_atmd(
-        &self,
-        t: &oxc::ast::ast::AssignmentTargetMaybeDefault<'_>,
-        name: &str,
-    ) -> Apps {
+    fn count_atmd(&self, t: &oxc::ast::ast::AssignmentTargetMaybeDefault<'_>, name: &str) -> Apps {
         match t {
             oxc::ast::ast::AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => self
                 .count(&d.init, name)
@@ -5271,7 +5228,9 @@ impl Checker<'_> {
                 self.emit(
                     span,
                     RuleKind::DoubleMove,
-                    format!("`{name}` is consumed and also borrowed or used in the same expression"),
+                    format!(
+                        "`{name}` is consumed and also borrowed or used in the same expression"
+                    ),
                 );
             }
             (VarState::Unconsumed, Part::More, _, _, _) => {
@@ -5318,11 +5277,7 @@ impl Checker<'_> {
                 } else {
                     RuleKind::UseAfterMove
                 };
-                self.emit(
-                    span,
-                    kind,
-                    format!("`{name}` has already been consumed"),
-                );
+                self.emit(span, kind, format!("`{name}` has already been consumed"));
             }
         }
     }
@@ -6542,7 +6497,9 @@ fn atmd_binding_name(t: &oxc::ast::ast::AssignmentTargetMaybeDefault<'_>) -> Opt
         oxc::ast::ast::AssignmentTargetMaybeDefault::AssignmentTargetWithDefault(d) => {
             assignment_target_prefix(&d.binding)
         }
-        other => other.as_assignment_target().and_then(assignment_target_prefix),
+        other => other
+            .as_assignment_target()
+            .and_then(assignment_target_prefix),
     }
 }
 
@@ -6698,9 +6655,7 @@ fn prop_key_name(key: &oxc::ast::ast::PropertyKey<'_>) -> Option<String> {
 fn string_prop_key(expr: &Expression<'_>) -> Option<String> {
     match peel(expr) {
         Expression::AssignmentExpression(a) => return string_prop_key(&a.right),
-        Expression::SequenceExpression(s) => {
-            return s.expressions.last().and_then(string_prop_key)
-        }
+        Expression::SequenceExpression(s) => return s.expressions.last().and_then(string_prop_key),
         Expression::LogicalExpression(b) => {
             return match b.operator {
                 LogicalOperator::And => string_prop_key(&b.right),
@@ -6857,7 +6812,9 @@ fn collect_fn_init_offs(init: &Expression<'_>, offs: &mut Vec<u32>) {
 fn new_instance_type(expr: &Expression<'_>) -> Option<String> {
     match peel(expr) {
         Expression::AssignmentExpression(a) => new_instance_type(&a.right),
-        Expression::SequenceExpression(s) => s.expressions.last().and_then(|e| new_instance_type(e)),
+        Expression::SequenceExpression(s) => {
+            s.expressions.last().and_then(|e| new_instance_type(e))
+        }
         Expression::ConditionalExpression(c) => {
             let a = new_instance_type(&c.consequent)?;
             let b = new_instance_type(&c.alternate)?;

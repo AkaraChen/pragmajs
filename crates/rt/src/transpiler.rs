@@ -4,33 +4,45 @@ use oxc_ast::ast::*;
 use oxc_ast::builder::AstBuilder;
 use oxc_ast_visit::{Visit, VisitMut};
 use oxc_codegen::Codegen;
-use oxc_parser::Parser;
-use oxc_span::{SPAN, SourceType};
+use oxc_span::SPAN;
+use pragma_parse::parse;
 use std::collections::HashMap;
 
 const RUNTIME_IDENT: &str = "__rt";
 const RETURN_TEMP_BASE: &str = "__rt_return";
 const VALUE_TEMP_BASE: &str = "__rt_v";
 
-pub fn transpile(source: &str, annotations: &[Annotation]) -> Result<String, String> {
+pub fn transpile(
+    source: &str,
+    file_name: &str,
+    annotations: &[Annotation],
+) -> Result<String, String> {
     let allocator = Allocator::default();
-    let source_type = SourceType::default().with_module(true);
-    let mut ret = Parser::new(&allocator, source, source_type)
-        .with_options(oxc_parser::ParseOptions::default())
-        .parse();
+    let mut parsed = parse(&allocator, file_name, source);
 
-    if !ret.diagnostics.is_empty() {
-        return Err(format!("Parse errors: {:?}", ret.diagnostics));
+    if !parsed.diagnostics.is_empty() {
+        return Err(format!("Parse errors: {:?}", parsed.diagnostics));
     }
 
-    let mut identifier_collector = IdentifierCollector::default();
-    identifier_collector.visit_program(&ret.program);
-    let mut visitor =
-        TranspilerVisitor::new(&allocator, annotations, &identifier_collector.identifiers);
-    visitor.visit_program(&mut ret.program);
+    Ok(transpile_program(
+        &allocator,
+        &mut parsed.program,
+        annotations,
+    ))
+}
 
-    let code = Codegen::new().build(&ret.program).code;
-    Ok(code)
+/// Transform a program already produced by `pragma_parse`. Mutates `program`.
+pub fn transpile_program<'a>(
+    allocator: &'a Allocator,
+    program: &mut Program<'a>,
+    annotations: &'a [Annotation],
+) -> String {
+    let mut identifier_collector = IdentifierCollector::default();
+    identifier_collector.visit_program(program);
+    let mut visitor =
+        TranspilerVisitor::new(allocator, annotations, &identifier_collector.identifiers);
+    visitor.visit_program(program);
+    Codegen::new().build(program).code
 }
 
 struct TranspilerVisitor<'a> {

@@ -1,5 +1,5 @@
-//! Tests drive the shipped `check_source` / `check_paths` APIs — the same
-//! functions the CLI calls. No mock checker.
+//! Tests drive the shipped `check_source` / `check_paths` library APIs.
+//! No mock checker. The unified CLI uses `check_program` on a shared parse.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -333,7 +333,7 @@ fn unmapped_eval() {
     );
 }
 
-/// Same entry point the CLI uses (`check_paths`) on the real `examples/` tree.
+/// Directory walk on the real `examples/` tree via the library `check_paths` API.
 #[test]
 fn examples_directory_via_shipped_check_paths() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples");

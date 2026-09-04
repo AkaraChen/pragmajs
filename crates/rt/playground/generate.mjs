@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Snapshot `refinejs check --target ecmascript` for every fixtures/flux_*.js
+ * Snapshot `pragmajs check --target ecmascript` for every fixtures/flux_*.js
  * into playground/catalog.json. The playground is static: it does not run Z3.
  *
  * Usage (from this crate): node playground/generate.mjs
@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const crate = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const root = path.resolve(crate, "../..");
 const fixturesDir = path.join(crate, "fixtures");
-const binary = path.join(root, "target", "debug", "pragma-rt");
+const binary = path.join(root, "target", "debug", "pragmajs");
 const outPath = path.join(crate, "playground", "catalog.json");
 const CONCURRENCY = 4;
 

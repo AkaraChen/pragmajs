@@ -52,7 +52,39 @@ fn checker_rejects_unknown_identifier() {
 #[test]
 fn transpiler_injects_assertions() {
     let result = parser::parse_file(SQRT_SOURCE, "test.js").unwrap();
-    let out = transpiler::transpile(SQRT_SOURCE, &result.annotations).unwrap();
+    let out = transpiler::transpile(SQRT_SOURCE, "test.js", &result.annotations).unwrap();
     assert!(out.contains("__rt.assert"));
     assert!(out.contains("Math.sqrt"));
+}
+
+const SQRT_TS_SOURCE: &str = r#"
+/*#rt
+ * type: (n: number | n > 0) => number | $ > 0
+ */
+function sqrt(n: number) {
+  return Math.sqrt(n);
+}
+
+/*#rt type: number | x > 0 */
+const x: number = 9;
+"#;
+
+#[test]
+fn typescript_type_syntax_checks_and_transpiles() {
+    let result = parser::parse_file(SQRT_TS_SOURCE, "test.ts").unwrap();
+    let errors = checker::check_source_with_environment(
+        SQRT_TS_SOURCE,
+        "test.ts",
+        &result.annotations,
+        Environment::Auto,
+    );
+    assert!(
+        errors
+            .iter()
+            .all(|error| !error.message.contains("JavaScript parse errors")),
+        "{errors:?}"
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let out = transpiler::transpile(SQRT_TS_SOURCE, "test.ts", &result.annotations).unwrap();
+    assert!(out.contains("__rt.assert"));
 }

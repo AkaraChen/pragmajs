@@ -1,9 +1,9 @@
-use pragma_rt::{checker, parser, prelude::Environment};
+use pragma_rt::{checker, parser, prelude::Environment, runtime, transpiler};
 use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    process::{self, Command, Output},
+    process::{self, Command},
 };
 
 fn fixture_path(relative: &str) -> PathBuf {
@@ -62,12 +62,16 @@ fn assert_fixture_rejected_with(relative: &str, environment: Environment, expect
     );
 }
 
-fn run_cli_check(relative: &str, target: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_pragma-rt"))
-        .args(["check", "--target", target])
-        .arg(fixture_path(relative))
-        .output()
-        .unwrap_or_else(|error| panic!("failed to execute pragma-rt CLI: {error}"))
+fn environment_from_target(target: &str) -> Environment {
+    match target {
+        "auto" => Environment::Auto,
+        "ecmascript" => Environment::Ecmascript,
+        "browser" => Environment::Browser,
+        "node" => Environment::Node,
+        "deno" => Environment::Deno,
+        "bun" => Environment::Bun,
+        other => panic!("unknown target {other}"),
+    }
 }
 
 #[test]
@@ -220,12 +224,7 @@ fn platform_contracts_reject_invalid_arguments_and_nullable_dom_access() {
 #[test]
 fn cli_target_selection_accepts_common_code_and_isolates_platform_globals() {
     for target in ["ecmascript", "browser", "node", "deno", "bun"] {
-        let output = run_cli_check("common/array_positive.js", target);
-        assert!(
-            output.status.success(),
-            "common Array fixture failed for {target}:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_fixture_valid("common/array_positive.js", environment_from_target(target));
     }
 
     for (fixture, target) in [
@@ -236,12 +235,7 @@ fn cli_target_selection_accepts_common_code_and_isolates_platform_globals() {
         ("dom/dom_positive.js", "browser"),
         ("dom/dom_inheritance_positive.js", "browser"),
     ] {
-        let output = run_cli_check(fixture, target);
-        assert!(
-            output.status.success(),
-            "{fixture} failed for its {target} target:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_fixture_valid(fixture, environment_from_target(target));
     }
 
     for (fixture, wrong_target, expected) in [
@@ -266,16 +260,7 @@ fn cli_target_selection_accepts_common_code_and_isolates_platform_globals() {
             "No static type information for 'document'",
         ),
     ] {
-        let output = run_cli_check(fixture, wrong_target);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success(),
-            "{fixture} unexpectedly passed for {wrong_target}"
-        );
-        assert!(
-            stderr.contains(expected),
-            "expected {fixture} under {wrong_target} to report {expected:?}, got:\n{stderr}"
-        );
+        assert_fixture_rejected_with(fixture, environment_from_target(wrong_target), expected);
     }
 }
 
@@ -289,12 +274,7 @@ fn auto_target_detects_each_standard_library_environment() {
         "bun/bun_positive.js",
         "dom/dom_positive.js",
     ] {
-        let output = run_cli_check(fixture, "auto");
-        assert!(
-            output.status.success(),
-            "auto target failed for {fixture}:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_fixture_valid(fixture, Environment::Auto);
     }
 }
 
@@ -323,17 +303,21 @@ fn built_positive_fixtures_run_on_installed_platform_runtimes() {
             "refinejs-prelude-{runner}-{}-{case_index}.mjs",
             process::id()
         ));
-        let build = Command::new(env!("CARGO_BIN_EXE_pragma-rt"))
-            .args(["build", "--target", environment.as_str()])
-            .arg(fixture_path(fixture))
-            .arg(&output_path)
-            .output()
-            .unwrap_or_else(|error| panic!("failed to execute pragma-rt build: {error}"));
+        let path = fixture_path(fixture);
+        let file_name = path.display().to_string();
+        let (source, annotations) = parse_fixture(fixture);
+        let errors =
+            checker::check_source_with_environment(&source, &file_name, &annotations, environment);
         assert!(
-            build.status.success(),
-            "pragma-rt build failed for {fixture} under {environment}:\n{}",
-            String::from_utf8_lossy(&build.stderr)
+            errors.is_empty(),
+            "check failed for {fixture} under {environment}:\n{}",
+            diagnostics(&errors)
         );
+        let transformed = transpiler::transpile(&source, &file_name, &annotations)
+            .unwrap_or_else(|error| panic!("transpile failed for {fixture}: {error}"));
+        let code = format!("{}\n\n{transformed}", runtime::runtime_block());
+        fs::write(&output_path, code)
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", output_path.display()));
 
         let output = match runner {
             "node" => Command::new(runner).arg(&output_path).output(),

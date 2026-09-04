@@ -1,0 +1,9 @@
+[package]
+name = "pragma-parse"
+version = "0.1.0"
+edition = "2021"
+description = "Shared oxc parse and semantic graph for pragma-own and pragma-rt"
+license = "MIT"
+
+[dependencies]
+oxc = { version = "0.148", features = ["ast_visit", "semantic"] }

@@ -5,26 +5,27 @@ use super::{
     SemanticRefinement, catalog, detect_environment, registry_for_source,
 };
 
+fn detect(source: &str) -> Result<Environment, EnvironmentError> {
+    detect_environment(source, "detect.js")
+}
+
 #[test]
 fn auto_detection_uses_unbound_globals_and_module_sources() {
+    assert_eq!(detect("const value = 1;").unwrap(), Environment::Ecmascript);
     assert_eq!(
-        detect_environment("const value = 1;").unwrap(),
-        Environment::Ecmascript
-    );
-    assert_eq!(
-        detect_environment("import { readFile } from 'node:fs'; readFile('x', () => {});").unwrap(),
+        detect("import { readFile } from 'node:fs'; readFile('x', () => {});").unwrap(),
         Environment::Node
     );
     assert_eq!(
-        detect_environment("await import('bun:test');").unwrap(),
+        detect("await import('bun:test');").unwrap(),
         Environment::Bun
     );
     assert_eq!(
-        detect_environment("Deno.readTextFile('x');").unwrap(),
+        detect("Deno.readTextFile('x');").unwrap(),
         Environment::Deno
     );
     assert_eq!(
-        detect_environment("document.querySelector('main');").unwrap(),
+        detect("document.querySelector('main');").unwrap(),
         Environment::Browser
     );
 }
@@ -32,22 +33,22 @@ fn auto_detection_uses_unbound_globals_and_module_sources() {
 #[test]
 fn auto_detection_ignores_local_bindings_comments_and_strings() {
     let local = "const Deno = { readTextFile() {} }; Deno.readTextFile();";
-    assert_eq!(detect_environment(local).unwrap(), Environment::Ecmascript);
+    assert_eq!(detect(local).unwrap(), Environment::Ecmascript);
     let inert = "// Bun.file('x')\nconst text = 'document process node:fs';";
-    assert_eq!(detect_environment(inert).unwrap(), Environment::Ecmascript);
+    assert_eq!(detect(inert).unwrap(), Environment::Ecmascript);
 }
 
 #[test]
 fn node_compatibility_markers_do_not_conflict_with_deno_or_bun() {
     let deno = "import { join } from 'node:path'; Deno.readTextFile(join('a', 'b'));";
-    assert_eq!(detect_environment(deno).unwrap(), Environment::Deno);
+    assert_eq!(detect(deno).unwrap(), Environment::Deno);
     let bun = "import { readFileSync } from 'node:fs'; Bun.file('x');";
-    assert_eq!(detect_environment(bun).unwrap(), Environment::Bun);
+    assert_eq!(detect(bun).unwrap(), Environment::Bun);
 }
 
 #[test]
 fn incompatible_runtime_markers_report_deterministic_evidence() {
-    let error = detect_environment("Deno.cwd(); Bun.file('x');").unwrap_err();
+    let error = detect("Deno.cwd(); Bun.file('x');").unwrap_err();
     let EnvironmentError::Conflict {
         candidates,
         evidence,
@@ -62,7 +63,7 @@ fn incompatible_runtime_markers_report_deterministic_evidence() {
         "conflicting environment markers for deno, bun; deno global 'Deno'; bun global 'Bun'"
     );
 
-    let browser_node = detect_environment("import 'node:fs'; document.body;").unwrap_err();
+    let browser_node = detect("import 'node:fs'; document.body;").unwrap_err();
     assert!(matches!(
         browser_node,
         EnvironmentError::Conflict { ref candidates, .. }
@@ -72,7 +73,7 @@ fn incompatible_runtime_markers_report_deterministic_evidence() {
 
 #[test]
 fn explicit_environment_wins_over_source_markers() {
-    let selected = registry_for_source(Environment::Node, "Deno.cwd();").unwrap();
+    let selected = registry_for_source(Environment::Node, "Deno.cwd();", "detect.js").unwrap();
     assert_eq!(selected.environment(), Environment::Node);
 }
 

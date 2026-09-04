@@ -1,4 +1,5 @@
 use crate::syntax::*;
+use oxc_ast::ast::Program;
 use std::path::Path;
 
 pub fn check_source_with_environment(
@@ -25,6 +26,50 @@ pub fn check_source_with_environment_and_compiler(
         errors.extend(crate::verifier::verify_source(
             source,
             file_name,
+            annotations,
+            environment,
+            Some(&hints),
+        ));
+    }
+    Ok(errors)
+}
+
+/// Check a program already produced by `pragma_parse`.
+pub fn check_program_with_environment(
+    source: &str,
+    file_name: &str,
+    program: &Program<'_>,
+    annotations: &[Annotation],
+    environment: crate::prelude::Environment,
+) -> Vec<RtError> {
+    crate::verifier::verify_program(source, file_name, program, annotations, environment, None)
+}
+
+/// Like [`check_program_with_environment`], with compiler-backed hints from the
+/// same parsed program (no second oxc parse).
+pub fn check_program_with_environment_and_compiler(
+    source: &str,
+    file_name: &str,
+    program: &Program<'_>,
+    annotations: &[Annotation],
+    environment: crate::prelude::Environment,
+    provider: &dyn crate::type_provider::CompilerTypeProvider,
+    config_path: &Path,
+    source_path: &Path,
+) -> Result<Vec<RtError>, crate::type_provider::CompilerTypeProviderError> {
+    let hints = crate::compiler_hints::analyze_program(
+        provider,
+        source,
+        program,
+        config_path,
+        source_path,
+    )?;
+    let mut errors = compiler_errors(source, file_name, source_path, hints.diagnostics());
+    if errors.is_empty() {
+        errors.extend(crate::verifier::verify_program(
+            source,
+            file_name,
+            program,
             annotations,
             environment,
             Some(&hints),

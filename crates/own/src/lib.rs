@@ -19,6 +19,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub use annot::{BorrowMode, FnSig, OwnDirective, OwnType};
+pub use check::check_program;
+pub use pragma_loc::offset_to_line_col;
 pub use prelude::Runtime;
 
 /// Kind of ownership/borrow rule that was violated.
@@ -132,6 +134,19 @@ pub fn check_source_with(filename: &str, source: &str, runtime: Runtime) -> Chec
     }
 }
 
+/// Like [`check_source_with`], using a program already produced by `pragma_parse`.
+pub fn check_parsed_with(
+    filename: &str,
+    source: &str,
+    program: &pragma_parse::Program<'_>,
+    runtime: Runtime,
+) -> CheckResult {
+    CheckResult {
+        diagnostics: check_program(filename, source, program, runtime),
+        sources: vec![(filename.to_string(), source.to_string())],
+    }
+}
+
 /// Check a file on disk with an explicit runtime prelude.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn check_path_with(path: &Path, runtime: Runtime) -> io::Result<CheckResult> {
@@ -191,32 +206,4 @@ fn is_js_ts(path: &Path) -> bool {
         path.extension().and_then(|s| s.to_str()),
         Some("js" | "mjs" | "cjs" | "jsx" | "ts" | "mts" | "cts" | "tsx")
     )
-}
-
-pub fn offset_to_line_col(source: &str, offset: u32) -> (u32, u32) {
-    let mut line = 1u32;
-    let mut col = 1u32;
-    for (i, ch) in source.char_indices() {
-        if i as u32 >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    (line, col)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn offset_mapping() {
-        assert_eq!(offset_to_line_col("ab\ncd", 0), (1, 1));
-        assert_eq!(offset_to_line_col("ab\ncd", 3), (2, 1));
-    }
 }

@@ -13,11 +13,11 @@ use oxc_ast::ast::{
     SimpleAssignmentTarget, Statement,
 };
 use oxc_ast_visit::{Visit, walk::walk_expression};
-use oxc_parser::{ParseOptions, Parser};
-use oxc_span::{GetSpan, SourceType, Span};
+use oxc_span::{GetSpan, Span};
 use oxc_syntax::operator::{
     AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator, UpdateOperator,
 };
+use pragma_parse::parse;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use z3::{
@@ -187,17 +187,32 @@ pub(crate) fn verify_source<'a>(
     compiler_hints: Option<&'a CompilerHints>,
 ) -> Vec<RtError> {
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, SourceType::default().with_module(true))
-        .with_options(ParseOptions::default())
-        .parse();
+    let parsed = parse(&allocator, file_name, source);
     if !parsed.diagnostics.is_empty() {
         return vec![RtError {
             message: format!("JavaScript parse errors: {:?}", parsed.diagnostics),
             loc: None,
         }];
     }
+    verify_program(
+        source,
+        file_name,
+        &parsed.program,
+        annotations,
+        environment,
+        compiler_hints,
+    )
+}
 
-    let library = match crate::prelude::registry_for_source(environment, source) {
+pub(crate) fn verify_program<'a>(
+    source: &'a str,
+    file_name: &'a str,
+    program: &Program<'_>,
+    annotations: &[Annotation],
+    environment: Environment,
+    compiler_hints: Option<&'a CompilerHints>,
+) -> Vec<RtError> {
+    let library = match crate::prelude::registry_for_program(environment, program) {
         Ok(library) => library,
         Err(error) => {
             return vec![RtError {
@@ -224,7 +239,7 @@ pub(crate) fn verify_source<'a>(
         errors: annotation_errors,
         fresh: 0,
     };
-    verifier.verify_program(&parsed.program);
+    verifier.verify_program(program);
     verifier.errors
 }
 

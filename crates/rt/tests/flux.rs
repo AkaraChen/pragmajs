@@ -55,7 +55,7 @@ fn assert_statically_valid_and_runs(path: &Path) {
         "expected {file_name} to verify statically, got:\n{errors:#?}"
     );
 
-    let transformed = transpiler::transpile(&source, &annotations)
+    let transformed = transpiler::transpile(&source, &file_name, &annotations)
         .unwrap_or_else(|error| panic!("failed to transpile {file_name}: {error}"));
     assert!(
         transformed.contains("__rt.assert"),
@@ -272,7 +272,12 @@ fn flux_rs_triage_lists_deferred_neg_surface_twins() {
 fn transpiler_preserves_parameter_return_and_variable_assertions_hygienically() {
     let core_path = fixture_path("flux_core_positive.js");
     let (core_source, core_annotations) = parse_fixture(&core_path);
-    let core_output = transpiler::transpile(&core_source, &core_annotations).unwrap();
+    let core_output = transpiler::transpile(
+        &core_source,
+        &core_path.display().to_string(),
+        &core_annotations,
+    )
+    .unwrap();
     assert_eq!(core_output.matches("__rt.assert").count(), 10);
     assert!(core_output.contains("parameter"));
     assert!(core_output.contains("return value"));
@@ -280,14 +285,24 @@ fn transpiler_preserves_parameter_return_and_variable_assertions_hygienically() 
 
     let hygiene_path = fixture_path("flux_hygiene_positive.js");
     let (hygiene_source, hygiene_annotations) = parse_fixture(&hygiene_path);
-    let hygiene_output = transpiler::transpile(&hygiene_source, &hygiene_annotations).unwrap();
+    let hygiene_output = transpiler::transpile(
+        &hygiene_source,
+        &hygiene_path.display().to_string(),
+        &hygiene_annotations,
+    )
+    .unwrap();
     assert_eq!(hygiene_output.matches("__rt.assert").count(), 3);
     assert!(hygiene_output.contains("__rt_return_1"));
     assert!(hygiene_output.contains("__rt_v_1"));
 
     let unicode_path = fixture_path("flux_unicode_hygiene_positive.js");
     let (unicode_source, unicode_annotations) = parse_fixture(&unicode_path);
-    let unicode_output = transpiler::transpile(&unicode_source, &unicode_annotations).unwrap();
+    let unicode_output = transpiler::transpile(
+        &unicode_source,
+        &unicode_path.display().to_string(),
+        &unicode_annotations,
+    )
+    .unwrap();
     assert_eq!(unicode_output.matches("__rt.assert").count(), 2);
     assert!(unicode_output.contains("__rt_return_1"));
     assert!(unicode_output.contains("__rt_v_1"));
