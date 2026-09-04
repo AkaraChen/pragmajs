@@ -332,7 +332,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             array_type(type_variable("$T")),
         )
         .with_receiver(receiver.clone())
-        .with_effects(receiver_effects(ReceiverEffect::Read))
+        .with_effects(receiver_effects(ReceiverEffect::None))
         .with_refinements(vec![SemanticRefinement::ResultLengthAtMostReceiver]),
     );
     registry.add_receiver_method(
@@ -346,7 +346,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             primitive_type("boolean"),
         )
         .with_receiver(receiver.clone())
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Array",
@@ -359,7 +359,7 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             optional_type(type_variable("$T")),
         )
         .with_receiver(receiver.clone())
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Array",
@@ -463,14 +463,14 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
         "text",
         FunctionSignature::new(Vec::new(), promise_type(primitive("string")))
             .with_receiver(named_type("Response"))
-            .with_effects(receiver_effects(ReceiverEffect::Read)),
+            .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Response",
         "json",
         FunctionSignature::new(Vec::new(), promise_type(primitive("unknown")))
             .with_receiver(named_type("Response"))
-            .with_effects(receiver_effects(ReceiverEffect::Read)),
+            .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Headers",
@@ -480,7 +480,7 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
             nullable_type(primitive("string")),
         )
         .with_receiver(named_type("Headers"))
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
 }
 
@@ -584,7 +584,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             nullable_type(named("Element")),
         )
         .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Document",
@@ -597,7 +597,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             named_type("NodeList"),
         )
         .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Document",
@@ -607,7 +607,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             nullable_type(named("HTMLElement")),
         )
         .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "Document",
@@ -620,7 +620,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             named_type("HTMLElement"),
         )
         .with_receiver(named_type("Document"))
-        .with_effects(receiver_effects(ReceiverEffect::Read)),
+        .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_method(
         "EventTarget",
@@ -650,7 +650,7 @@ fn add_dom(registry: &mut LibraryRegistry) {
             primitive_type("boolean"),
         )
         .with_receiver(named_type("EventTarget"))
-        .with_effects(user_code_effects(ReceiverEffect::Read)),
+        .with_effects(user_code_effects(ReceiverEffect::None)),
     );
 }
 
@@ -1029,7 +1029,7 @@ fn add_bun(registry: &mut LibraryRegistry) {
         "text",
         FunctionSignature::new(Vec::new(), promise_type(primitive("string")))
             .with_receiver(named_type("BunFile"))
-            .with_effects(receiver_effects(ReceiverEffect::Read)),
+            .with_effects(receiver_effects(ReceiverEffect::None)),
     );
     registry.add_receiver_property(
         "BunFile",
@@ -1262,7 +1262,7 @@ fn user_code_effects(receiver: ReceiverEffect) -> FunctionEffects {
 
 fn callback_effects(parameter_index: usize, timing: CallbackTiming) -> FunctionEffects {
     FunctionEffects {
-        receiver: ReceiverEffect::Read,
+        receiver: ReceiverEffect::None,
         callbacks: vec![CallbackUse {
             parameter_index,
             timing,

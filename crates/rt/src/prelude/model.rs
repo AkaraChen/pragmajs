@@ -60,7 +60,6 @@ pub struct CallbackUse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiverEffect {
     None,
-    Read,
     Mutate,
 }
 
