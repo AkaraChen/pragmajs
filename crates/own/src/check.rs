@@ -3215,10 +3215,7 @@ impl Checker<'_> {
     }
 
     fn apply_stmt_directives(&mut self, stmt: &Statement<'_>) {
-        if !self.features.local_directives {
-            return;
-        }
-        // Variable declarations apply let/borrow/clone themselves.
+        // Variable declarations apply kind/borrow/clone directives themselves.
         if matches!(stmt, Statement::VariableDeclaration(_)) {
             return;
         }
@@ -3226,18 +3223,20 @@ impl Checker<'_> {
         let dirs: Vec<OwnDirective> = self.file.dirs_at(start).into_iter().cloned().collect();
         for d in dirs {
             match d {
-                OwnDirective::Drop { name } => {
+                OwnDirective::Drop { name } if self.features.local_drop_directives => {
                     self.force_consume(&name, start);
                 }
                 OwnDirective::Borrow {
                     owner, alias, mode, ..
-                } => {
+                } if self.features.local_borrow_directives => {
                     self.begin_borrow(&owner, &alias, mode, start);
                 }
-                OwnDirective::Clone { owner, alias } => {
+                OwnDirective::Clone { owner, alias }
+                    if self.features.local_clone_directives =>
+                {
                     self.do_clone(&owner, &alias, start);
                 }
-                OwnDirective::Let { name, ty } => {
+                OwnDirective::Let { name, ty } if self.features.local_kind_directives => {
                     // handled in var decl; if this is a bare statement, add anyway
                     if !matches!(stmt, Statement::VariableDeclaration(_)) {
                         self.add_from_type(&name, &ty, start);
@@ -3353,31 +3352,42 @@ impl Checker<'_> {
             }
             let mut dirs = decl_dirs.clone();
             dirs.extend(self.file.dirs_at(d.span.start).into_iter().cloned());
-            if !self.features.local_directives {
-                dirs.clear();
-            }
             let name = ident_of_pattern(&d.id);
-            let borrow = self
+            let borrow = (self.features.borrow_model && self.features.local_borrow_directives)
+            .then(|| {
+                dirs.iter().find_map(|x| match x {
+                    OwnDirective::Borrow {
+                        owner, alias, mode, ..
+                    } => Some((owner.clone(), alias.clone(), *mode)),
+                    _ => None,
+                })
+            })
+            .flatten();
+            let clone = self
                 .features
-                .borrow_model
+                .local_clone_directives
                 .then(|| {
                     dirs.iter().find_map(|x| match x {
-                        OwnDirective::Borrow {
-                            owner, alias, mode, ..
-                        } => Some((owner.clone(), alias.clone(), *mode)),
+                        OwnDirective::Clone { owner, alias } => {
+                            Some((owner.clone(), alias.clone()))
+                        }
                         _ => None,
                     })
                 })
                 .flatten();
-            let clone = dirs.iter().find_map(|x| match x {
-                OwnDirective::Clone { owner, alias } => Some((owner.clone(), alias.clone())),
-                _ => None,
-            });
-            let let_ty = dirs.iter().find_map(|x| match x {
-                OwnDirective::Let { name, ty } => Some((name.clone(), ty.clone())),
-                OwnDirective::Kind(ty) => Some((name.clone().unwrap_or_default(), ty.clone())),
-                _ => None,
-            });
+            let let_ty = self
+                .features
+                .local_kind_directives
+                .then(|| {
+                    dirs.iter().find_map(|x| match x {
+                        OwnDirective::Let { name, ty } => Some((name.clone(), ty.clone())),
+                        OwnDirective::Kind(ty) => {
+                            Some((name.clone().unwrap_or_default(), ty.clone()))
+                        }
+                        _ => None,
+                    })
+                })
+                .flatten();
 
             if let Some((owner, alias, mode)) = borrow {
                 self.begin_borrow(&owner, &alias, mode, d.span.start);
@@ -5582,7 +5592,7 @@ impl Checker<'_> {
 
     fn arg_mode(&self, expr: &Expression<'_>, sig: Option<&FnSig>, i: usize) -> ArgMode {
         let start = expr.span().start;
-        if self.features.local_directives && self.features.borrow_model {
+        if self.features.local_borrow_directives && self.features.borrow_model {
             for d in self.file.dirs_at(start) {
                 match d {
                     OwnDirective::Shorthand(BorrowMode::Read) => return ArgMode::Read,

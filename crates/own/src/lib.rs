@@ -39,7 +39,10 @@ pub enum OwnAblation {
     ExactOnce,
     AffineKind,
     BorrowModel,
-    LocalDirectives,
+    LocalBorrowDirectives,
+    LocalCloneDirectives,
+    LocalDropDirectives,
+    LocalKindDirectives,
     LocalCalleeContracts,
     OwnedReturnPropagation,
     InstanceDispatch,
@@ -52,13 +55,16 @@ pub enum OwnAblation {
 }
 
 impl OwnAblation {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 18] = [
         Self::FunctionContracts,
         Self::MoveTracking,
         Self::ExactOnce,
         Self::AffineKind,
         Self::BorrowModel,
-        Self::LocalDirectives,
+        Self::LocalBorrowDirectives,
+        Self::LocalCloneDirectives,
+        Self::LocalDropDirectives,
+        Self::LocalKindDirectives,
         Self::LocalCalleeContracts,
         Self::OwnedReturnPropagation,
         Self::InstanceDispatch,
@@ -77,7 +83,10 @@ impl OwnAblation {
             Self::ExactOnce => "exact-once",
             Self::AffineKind => "affine-kind",
             Self::BorrowModel => "borrow-model",
-            Self::LocalDirectives => "local-directives",
+            Self::LocalBorrowDirectives => "local-borrow-directives",
+            Self::LocalCloneDirectives => "local-clone-directives",
+            Self::LocalDropDirectives => "local-drop-directives",
+            Self::LocalKindDirectives => "local-kind-directives",
             Self::LocalCalleeContracts => "local-callee-contracts",
             Self::OwnedReturnPropagation => "owned-return-propagation",
             Self::InstanceDispatch => "instance-dispatch",
@@ -102,7 +111,14 @@ pub struct OwnFeatures {
     pub exact_once: bool,
     pub affine_kind: bool,
     pub borrow_model: bool,
-    pub local_directives: bool,
+    /// Named `borrow` and argument-position `&readonly` / `&mut` directives.
+    pub local_borrow_directives: bool,
+    /// Explicit `clone owner as alias` directives.
+    pub local_clone_directives: bool,
+    /// Explicit `drop name` directives.
+    pub local_drop_directives: bool,
+    /// Both `let name: kind` and binding-position kind shorthand directives.
+    pub local_kind_directives: bool,
     pub local_callee_contracts: bool,
     pub owned_return_propagation: bool,
     pub instance_dispatch: bool,
@@ -122,7 +138,10 @@ impl OwnFeatures {
             exact_once: true,
             affine_kind: true,
             borrow_model: true,
-            local_directives: true,
+            local_borrow_directives: true,
+            local_clone_directives: true,
+            local_drop_directives: true,
+            local_kind_directives: true,
             local_callee_contracts: true,
             owned_return_propagation: true,
             instance_dispatch: true,
@@ -143,7 +162,10 @@ impl OwnFeatures {
             OwnAblation::ExactOnce => features.exact_once = false,
             OwnAblation::AffineKind => features.affine_kind = false,
             OwnAblation::BorrowModel => features.borrow_model = false,
-            OwnAblation::LocalDirectives => features.local_directives = false,
+            OwnAblation::LocalBorrowDirectives => features.local_borrow_directives = false,
+            OwnAblation::LocalCloneDirectives => features.local_clone_directives = false,
+            OwnAblation::LocalDropDirectives => features.local_drop_directives = false,
+            OwnAblation::LocalKindDirectives => features.local_kind_directives = false,
             OwnAblation::LocalCalleeContracts => features.local_callee_contracts = false,
             OwnAblation::OwnedReturnPropagation => features.owned_return_propagation = false,
             OwnAblation::InstanceDispatch => features.instance_dispatch = false,
@@ -156,6 +178,7 @@ impl OwnFeatures {
         }
         features
     }
+
 }
 
 impl Default for OwnFeatures {

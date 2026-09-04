@@ -384,10 +384,10 @@ fn main() -> Result<(), String> {
             &mut runs,
             &cases,
             "borrow-model",
-            "local-directives",
-            |features, borrow_model, local_directives| {
+            "local-borrow-directives",
+            |features, borrow_model, local_borrow_directives| {
                 features.borrow_model = borrow_model;
-                features.local_directives = local_directives;
+                features.local_borrow_directives = local_borrow_directives;
             },
         ),
         add_interaction(

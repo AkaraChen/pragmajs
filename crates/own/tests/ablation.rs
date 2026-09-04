@@ -87,4 +87,84 @@ fn optional_call_path_ablation_exposes_conditional_consume() {
         vec!["use-after-move"],
         "ordinary call transfer should expose reuse after the conditional consume",
     );
+
+    let path = root.join("ablation/fixtures/accept-known-optional-call-only.js");
+    let source = fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        outcome(&path, &source, OwnFeatures::all(), Runtime::Node),
+        vec!["unique-forget"],
+        "the syntax-only path split currently invents an infeasible skipped branch",
+    );
+    assert_eq!(
+        outcome(
+            &path,
+            &source,
+            OwnFeatures::without(OwnAblation::OptionalCallPaths),
+            Runtime::Node,
+        ),
+        Vec::<&'static str>::new(),
+        "the ablation should accept a call of a definitely bound local function",
+    );
+}
+
+#[test]
+fn local_directive_splits_have_semantic_witnesses() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let witnesses = [
+        (
+            OwnAblation::LocalBorrowDirectives,
+            root.join("examples/ok-lifetime-scope.js"),
+            &[][..],
+            &["unique-forget", "use-after-move"][..],
+        ),
+        (
+            OwnAblation::LocalCloneDirectives,
+            root.join("examples/ok-clone.js"),
+            &[][..],
+            &["use-after-move"][..],
+        ),
+        (
+            OwnAblation::LocalDropDirectives,
+            root.join("ablation/fixtures/accept-local-drop-directive.js"),
+            &[][..],
+            &["unique-forget"][..],
+        ),
+        (
+            OwnAblation::LocalKindDirectives,
+            root.join("ablation/fixtures/reject-local-kind-directive.js"),
+            &["unique-forget"][..],
+            &[][..],
+        ),
+        (
+            OwnAblation::LocalKindDirectives,
+            root.join("ablation/fixtures/reject-local-let-directive.js"),
+            &["unique-forget"][..],
+            &[][..],
+        ),
+    ];
+
+    for (ablation, path, expected_baseline, expected_ablated) in witnesses {
+        let source = fs::read_to_string(&path).unwrap();
+        let baseline = outcome(&path, &source, OwnFeatures::all(), Runtime::Node);
+        let ablated = outcome(
+            &path,
+            &source,
+            OwnFeatures::without(ablation),
+            Runtime::Node,
+        );
+        assert_eq!(
+            baseline,
+            expected_baseline,
+            "unexpected baseline for {} witness {}",
+            ablation.slug(),
+            path.display(),
+        );
+        assert_eq!(
+            ablated,
+            expected_ablated,
+            "unexpected ablated result for {} witness {}",
+            ablation.slug(),
+            path.display(),
+        );
+    }
 }
