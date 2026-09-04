@@ -26,3 +26,15 @@ JavaScript without the refinement runtime.
 
 `pragma-own` and `pragma-rt` stay libraries. The own wasm playground still
 builds with `cargo build -p pragma-own --lib`.
+
+The integration ablation matrix is reproducible without a local Corsa binary:
+
+```bash
+cargo run -p pragmajs --example ablation
+```
+
+Its gold manifest covers `own`/`rt`/`all`, compiler off/auto/explicit-provider
+paths, sparse compiler evidence, and a Bun ownership-runtime × refinement-target
+matrix. CSV output keeps parse, ownership, refinement, compiler, and provider
+diagnostics in separate columns instead of reducing a cell to the CLI exit code;
+it also records the frontend parse count and per-cell wall time.

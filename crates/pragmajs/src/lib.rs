@@ -15,7 +15,10 @@ use pragma_own::{
 use pragma_parse::{parse, Allocator, Parsed};
 use pragma_rt::prelude::Environment;
 use pragma_rt::syntax::{Annotation, RtError};
-use pragma_rt::type_provider::{CompilerTypeProviderError, CorsaTypeProvider};
+use pragma_rt::type_provider::{
+    CompilerDiagnostic, CompilerDiagnosticSeverity, CompilerTypeProvider,
+    CompilerTypeProviderError, CorsaTypeProvider,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompilerOptions {
@@ -125,6 +128,14 @@ pub struct CombinedCheck {
     pub own: CheckResult,
     pub rt: Vec<RtError>,
     pub rt_annotations: Vec<Annotation>,
+    /// Raw diagnostics returned by the compiler analysis used for this check.
+    ///
+    /// When RT is selected, compiler errors also remain represented in `rt` and
+    /// keep the existing CLI output and failure behavior. In own-only mode they
+    /// remain observational and do not change [`Self::failed`]. This field lets
+    /// experiments attribute them to the compiler instead of treating the
+    /// combined exit status as a checker result.
+    pub compiler_diagnostics: Vec<CompilerDiagnostic>,
 }
 
 impl CombinedCheck {
@@ -155,6 +166,23 @@ impl CombinedCheck {
         }
         lines
     }
+
+    /// Refinement-checker diagnostics with compiler errors excluded.
+    ///
+    /// The refinement checker stops before verification when the compiler
+    /// reports an error, so in that case every entry in `rt` is the formatted
+    /// compiler error rather than a verifier finding.
+    pub fn refinement_diagnostics(&self) -> &[RtError] {
+        if self
+            .compiler_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == CompilerDiagnosticSeverity::Error)
+        {
+            &[]
+        } else {
+            &self.rt
+        }
+    }
 }
 
 /// Run own and rt on a program already produced by `pragma_parse`.
@@ -166,7 +194,55 @@ pub fn check_parsed(
     parsed: &Parsed<'_>,
     options: &CheckOptions,
 ) -> Result<CombinedCheck, CombinedError> {
-    let (rt_annotations, mut rt) = if options.checker.includes_rt() {
+    check_parsed_using(filename, source, parsed, options, CompilerInput::Discover)
+}
+
+/// Run the combined pipeline with an explicitly supplied compiler provider.
+///
+/// This is the deterministic counterpart to [`check_parsed`] for experiments
+/// and provider integration tests: `options.compiler` still controls whether
+/// compiler analysis is off, automatic, or explicitly forced, but executable
+/// discovery is replaced by `provider`. The caller supplies the exact project
+/// and source paths that are forwarded to the provider.
+pub fn check_parsed_with_compiler_provider(
+    filename: &str,
+    source: &str,
+    parsed: &Parsed<'_>,
+    options: &CheckOptions,
+    provider: &dyn CompilerTypeProvider,
+    tsconfig_path: &Path,
+    source_path: &Path,
+) -> Result<CombinedCheck, CombinedError> {
+    check_parsed_using(
+        filename,
+        source,
+        parsed,
+        options,
+        CompilerInput::Provided {
+            provider,
+            tsconfig_path,
+            source_path,
+        },
+    )
+}
+
+enum CompilerInput<'a> {
+    Discover,
+    Provided {
+        provider: &'a dyn CompilerTypeProvider,
+        tsconfig_path: &'a Path,
+        source_path: &'a Path,
+    },
+}
+
+fn check_parsed_using(
+    filename: &str,
+    source: &str,
+    parsed: &Parsed<'_>,
+    options: &CheckOptions,
+    compiler_input: CompilerInput<'_>,
+) -> Result<CombinedCheck, CombinedError> {
+    let (rt_annotations, rt) = if options.checker.includes_rt() {
         match pragma_rt::parser::annotations_from_program(source, filename, &parsed.program) {
             Ok(result) => (result.annotations, Vec::new()),
             Err(message) => (Vec::new(), vec![RtError { message, loc: None }]),
@@ -182,78 +258,156 @@ pub fn check_parsed(
     let compiler_required =
         should_resolve_compiler(options.checker, &own_offsets, &options.compiler);
 
-    let mut own = CheckResult::default();
-    if rt.is_empty() {
-        let compiler = if compiler_required {
-            compiler_for_file(filename, &options.compiler)?
-        } else {
-            None
-        };
-        if let Some(resolved) = compiler {
-            let provider = CorsaTypeProvider::new(resolved.corsa_path, resolved.working_directory);
-            let rt_offsets = pragma_rt::parser::omitted_query_offsets(&rt_annotations);
-            let extra = selected_compiler_offsets(options.checker, &own_offsets, &rt_offsets);
-            let hints = pragma_rt::compiler_hints::analyze_program_with_offsets(
-                &provider,
-                source,
-                &parsed.program,
-                &resolved.tsconfig_path,
-                &resolved.source_path,
-                &extra,
-            )
-            .map_err(CombinedError::Compiler)?;
-            if options.checker.includes_own() {
-                let mut payloads = HashMap::new();
-                for offset in own_offsets {
-                    if let Some(rendered) = hints.rendered_at(offset as usize) {
-                        if let Some(name) = own_payload_name(rendered) {
-                            payloads.insert(offset, name);
-                        }
-                    }
-                }
-                own = check_parsed_with_payloads(
-                    filename,
-                    source,
-                    &parsed.program,
-                    options.runtime,
-                    Some(&payloads),
-                );
-            }
-            if options.checker.includes_rt() {
-                rt = pragma_rt::checker::check_program_with_hints(
-                    source,
-                    filename,
-                    &parsed.program,
-                    &rt_annotations,
-                    options.environment,
-                    &resolved.source_path,
-                    &hints,
-                );
-            }
-        } else {
-            if options.checker.includes_own() {
-                own = check_parsed_with(filename, source, &parsed.program, options.runtime);
-            }
-            if options.checker.includes_rt() {
-                rt = pragma_rt::checker::check_program_with_environment(
-                    source,
-                    filename,
-                    &parsed.program,
-                    &rt_annotations,
-                    options.environment,
-                );
-            }
-        }
-    } else if options.checker.includes_own() {
-        own = check_parsed_with(filename, source, &parsed.program, options.runtime);
+    if !rt.is_empty() || !compiler_required || matches!(options.compiler, CompilerMode::Off) {
+        return Ok(check_without_compiler(
+            filename,
+            source,
+            parsed,
+            options,
+            rt_annotations,
+            rt,
+        ));
     }
 
+    match compiler_input {
+        CompilerInput::Discover => {
+            let Some(resolved) = compiler_for_file(filename, &options.compiler)? else {
+                return Ok(check_without_compiler(
+                    filename,
+                    source,
+                    parsed,
+                    options,
+                    rt_annotations,
+                    rt,
+                ));
+            };
+            let provider = CorsaTypeProvider::new(resolved.corsa_path, resolved.working_directory);
+            check_with_compiler(
+                filename,
+                source,
+                parsed,
+                options,
+                rt_annotations,
+                rt,
+                own_offsets,
+                &provider,
+                &resolved.tsconfig_path,
+                &resolved.source_path,
+            )
+        }
+        CompilerInput::Provided {
+            provider,
+            tsconfig_path,
+            source_path,
+        } => check_with_compiler(
+            filename,
+            source,
+            parsed,
+            options,
+            rt_annotations,
+            rt,
+            own_offsets,
+            provider,
+            tsconfig_path,
+            source_path,
+        ),
+    }
+}
+
+fn check_without_compiler(
+    filename: &str,
+    source: &str,
+    parsed: &Parsed<'_>,
+    options: &CheckOptions,
+    rt_annotations: Vec<Annotation>,
+    mut rt: Vec<RtError>,
+) -> CombinedCheck {
+    let own = if options.checker.includes_own() {
+        check_parsed_with(filename, source, &parsed.program, options.runtime)
+    } else {
+        CheckResult::default()
+    };
+    if rt.is_empty() && options.checker.includes_rt() {
+        rt = pragma_rt::checker::check_program_with_environment(
+            source,
+            filename,
+            &parsed.program,
+            &rt_annotations,
+            options.environment,
+        );
+    }
+    CombinedCheck {
+        filename: filename.to_string(),
+        parse_diagnostics: parsed.diagnostics.clone(),
+        own,
+        rt,
+        rt_annotations,
+        compiler_diagnostics: Vec::new(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_with_compiler(
+    filename: &str,
+    source: &str,
+    parsed: &Parsed<'_>,
+    options: &CheckOptions,
+    rt_annotations: Vec<Annotation>,
+    mut rt: Vec<RtError>,
+    own_offsets: Vec<u32>,
+    provider: &dyn CompilerTypeProvider,
+    tsconfig_path: &Path,
+    source_path: &Path,
+) -> Result<CombinedCheck, CombinedError> {
+    let rt_offsets = pragma_rt::parser::omitted_query_offsets(&rt_annotations);
+    let extra = selected_compiler_offsets(options.checker, &own_offsets, &rt_offsets);
+    let hints = pragma_rt::compiler_hints::analyze_program_with_offsets(
+        provider,
+        source,
+        &parsed.program,
+        tsconfig_path,
+        source_path,
+        &extra,
+    )
+    .map_err(CombinedError::Compiler)?;
+    let compiler_diagnostics = hints.diagnostics().to_vec();
+    let own = if options.checker.includes_own() {
+        let mut payloads = HashMap::new();
+        for offset in own_offsets {
+            if let Some(rendered) = hints.rendered_at(offset as usize) {
+                if let Some(name) = own_payload_name(rendered) {
+                    payloads.insert(offset, name);
+                }
+            }
+        }
+        check_parsed_with_payloads(
+            filename,
+            source,
+            &parsed.program,
+            options.runtime,
+            Some(&payloads),
+        )
+    } else {
+        CheckResult::default()
+    };
+    if options.checker.includes_rt() {
+        rt = pragma_rt::checker::check_program_with_hints(
+            source,
+            filename,
+            &parsed.program,
+            &rt_annotations,
+            options.environment,
+            source_path,
+            &hints,
+        );
+    }
     Ok(CombinedCheck {
         filename: filename.to_string(),
         parse_diagnostics: parsed.diagnostics.clone(),
         own,
         rt,
         rt_annotations,
+        compiler_diagnostics,
     })
 }
 

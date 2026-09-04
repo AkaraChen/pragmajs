@@ -1,0 +1,20 @@
+# name	fixture	checker	compiler	runtime	target	parse	own	rt	compiler diagnostics	provider errors	combined failed
+cross-own-off	cross-checker.js	own	off	none	ecmascript	0	1	0	0	0	true
+cross-rt-off	cross-checker.js	rt	off	none	ecmascript	0	0	1	0	0	true
+cross-all-off	cross-checker.js	all	off	none	ecmascript	0	1	1	0	0	true
+cross-own-auto-skip	cross-checker.js	own	auto	none	ecmascript	0	1	0	0	0	true
+compiler-own-off	compiler-diagnostic.js	own	off	none	ecmascript	0	0	0	0	0	false
+compiler-own-explicit	compiler-diagnostic.js	own	explicit	none	ecmascript	0	0	0	1	0	false
+compiler-rt-off	compiler-diagnostic.js	rt	off	none	ecmascript	0	0	1	0	0	true
+compiler-rt-explicit	compiler-diagnostic.js	rt	explicit	none	ecmascript	0	0	0	1	0	true
+compiler-all-off	compiler-diagnostic.js	all	off	none	ecmascript	0	0	1	0	0	true
+compiler-all-explicit	compiler-diagnostic.js	all	explicit	none	ecmascript	0	0	0	1	0	true
+provider-all-explicit	provider-error.js	all	explicit	none	ecmascript	0	0	0	0	1	true
+sparse-rt-off	sparse-rt.ts	rt	off	none	ecmascript	0	0	2	0	0	true
+sparse-rt-explicit	sparse-rt.ts	rt	explicit	none	ecmascript	0	0	0	0	0	false
+sparse-own-off	sparse-own.ts	own	off	none	ecmascript	0	2	0	0	0	true
+sparse-own-explicit	sparse-own.ts	own	explicit	none	ecmascript	0	1	0	0	0	true
+platform-node-node	platform-bun.js	all	off	node	node	0	0	1	0	0	true
+platform-bun-node	platform-bun.js	all	off	bun	node	0	1	1	0	0	true
+platform-node-bun	platform-bun.js	all	off	node	bun	0	0	0	0	0	false
+platform-bun-bun	platform-bun.js	all	off	bun	bun	0	1	0	0	0	true
