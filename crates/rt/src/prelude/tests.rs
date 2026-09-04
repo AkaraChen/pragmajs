@@ -81,7 +81,6 @@ fn explicit_environment_wins_over_source_markers() {
 fn ecmascript_catalog_exposes_generic_array_contracts_and_refinements() {
     let catalog = catalog::build(Environment::Ecmascript);
     let map = &catalog.receiver_method("Array", "map").unwrap()[0];
-    assert_eq!(map.type_parameters, ["$T", "$U"]);
     assert_eq!(map.effects.receiver, ReceiverEffect::Read);
     assert_eq!(map.effects.callbacks[0].timing, CallbackTiming::Immediate);
     assert!(matches!(

@@ -128,8 +128,7 @@ fn add_ecmascript(registry: &mut LibraryRegistry) {
                 generic_type("Iterable", vec![type_variable("$T")]),
             )],
             array_type(type_variable("$T")),
-        )
-        .with_type_parameters(&["$T"]),
+        ),
     );
     registry.add_static_function(
         "Number.isInteger",
@@ -212,7 +211,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
                 vec![LibraryParameter::required("callback", callback)],
                 array_type(type_variable("$U")),
             )
-            .with_type_parameters(&["$T", "$U"])
             .with_receiver(receiver.clone())
             .with_effects(callback_effects(0, CallbackTiming::Immediate)),
         );
@@ -224,7 +222,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             vec![LibraryParameter::required("callback", element_callback)],
             array_type(type_variable("$U")),
         )
-        .with_type_parameters(&["$T", "$U"])
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate))
         .with_refinements(vec![
@@ -253,7 +250,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             )],
             array_type(type_variable("$T")),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate))
         .with_refinements(vec![
@@ -272,7 +268,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
                 )],
                 primitive_type("boolean"),
             )
-            .with_type_parameters(&["$T"])
             .with_receiver(receiver.clone())
             .with_effects(callback_effects(0, CallbackTiming::Immediate)),
         );
@@ -294,7 +289,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             )],
             primitive_type("void"),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate)),
     );
@@ -305,7 +299,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             vec![LibraryParameter::required("predicate", predicate_callback)],
             optional_type(type_variable("$T")),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate)),
     );
@@ -337,7 +330,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             )],
             type_variable_type("$T"),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate)),
     );
@@ -351,7 +343,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             ],
             type_variable_type("$U"),
         )
-        .with_type_parameters(&["$T", "$U"])
         .with_receiver(receiver.clone())
         .with_effects(callback_effects(0, CallbackTiming::Immediate)),
     );
@@ -366,7 +357,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             ],
             array_type(type_variable("$T")),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(receiver_effects(ReceiverEffect::Read))
         .with_refinements(vec![SemanticRefinement::ResultLengthAtMostReceiver]),
@@ -381,7 +371,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             ],
             primitive_type("boolean"),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(receiver_effects(ReceiverEffect::Read)),
     );
@@ -395,7 +384,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             )],
             optional_type(type_variable("$T")),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(receiver_effects(ReceiverEffect::Read)),
     );
@@ -406,7 +394,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             vec![LibraryParameter::rest("items", type_variable_type("$T"))],
             non_negative_number(),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(receiver.clone())
         .with_effects(receiver_effects(ReceiverEffect::Mutate))
         .with_refinements(vec![
@@ -418,7 +405,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
         "Array",
         "pop",
         FunctionSignature::new(Vec::new(), optional_type(type_variable("$T")))
-            .with_type_parameters(&["$T"])
             .with_receiver(receiver)
             .with_effects(receiver_effects(ReceiverEffect::Mutate)),
     );
@@ -426,7 +412,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
         "DenseArray",
         "pop",
         FunctionSignature::new(Vec::new(), type_variable_type("$T"))
-            .with_type_parameters(&["$T"])
             .with_receiver(generic_type("DenseArray", vec![type_variable("$T")]))
             .with_effects(receiver_effects(ReceiverEffect::Mutate))
             .with_refinements(vec![
@@ -441,7 +426,6 @@ fn add_array_methods(registry: &mut LibraryRegistry) {
             vec![LibraryParameter::rest("items", type_variable_type("$T"))],
             non_negative_number(),
         )
-        .with_type_parameters(&["$T"])
         .with_receiver(generic_type("DenseArray", vec![type_variable("$T")]))
         .with_effects(receiver_effects(ReceiverEffect::Mutate))
         .with_refinements(vec![
@@ -488,8 +472,7 @@ fn add_web_platform(registry: &mut LibraryRegistry) {
                 type_variable_type("$T"),
             )],
             type_variable_type("$T"),
-        )
-        .with_type_parameters(&["$T"]),
+        ),
     );
     registry.add_receiver_property(
         "Response",
@@ -1170,16 +1153,13 @@ fn add_bun(registry: &mut LibraryRegistry) {
     registry.add_module_export(
         "bun:test",
         "expect",
-        function_export(
-            FunctionSignature::new(
-                vec![LibraryParameter::required(
-                    "actual",
-                    type_variable_type("$T"),
-                )],
-                named_type("Bun.Matchers"),
-            )
-            .with_type_parameters(&["$T"]),
-        ),
+        function_export(FunctionSignature::new(
+            vec![LibraryParameter::required(
+                "actual",
+                type_variable_type("$T"),
+            )],
+            named_type("Bun.Matchers"),
+        )),
     );
 }
 

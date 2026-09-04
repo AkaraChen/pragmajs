@@ -111,11 +111,9 @@ pub enum SemanticRefinement {
     ReceiverMayContainArguments,
 }
 
-/// One callable overload. Type parameter names include their `$` prefix, and
-/// references use `BaseType::Named("$T")`.
+/// One callable overload. Generic placeholders use `BaseType::Named("$T")`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionSignature {
-    pub type_parameters: Vec<String>,
     pub receiver: Option<RefinementType>,
     pub parameters: Vec<LibraryParameter>,
     pub returns: RefinementType,
@@ -126,22 +124,12 @@ pub struct FunctionSignature {
 impl FunctionSignature {
     pub fn new(parameters: Vec<LibraryParameter>, returns: RefinementType) -> Self {
         Self {
-            type_parameters: Vec::new(),
             receiver: None,
             parameters,
             returns,
             effects: FunctionEffects::default(),
             refinements: Vec::new(),
         }
-    }
-
-    pub fn with_type_parameters(mut self, parameters: &[&str]) -> Self {
-        assert!(
-            parameters.iter().all(|name| name.starts_with('$')),
-            "library type parameters must use the '$' prefix"
-        );
-        self.type_parameters = parameters.iter().map(|name| (*name).to_string()).collect();
-        self
     }
 
     pub fn with_receiver(mut self, receiver: RefinementType) -> Self {
