@@ -1,3 +1,4 @@
+use pragma_rt::verifier::{RtAblation, RtFeatures};
 use pragma_rt::{checker, parser, prelude::Environment, runtime, syntax::Annotation, transpiler};
 use std::{
     fs,
@@ -104,6 +105,39 @@ fn flux_negative_fixtures_are_rejected_statically() {
             "{file_name} was rejected only because the solver returned unknown: {errors:#?}"
         );
     }
+}
+
+#[test]
+fn abstract_predicate_congruence_has_an_end_to_end_witness() {
+    let path = fixture_path("flux_predicate_congruence_positive.js");
+    let file_name = path.display().to_string();
+    let (source, annotations) = parse_fixture(&path);
+
+    let baseline = checker::check_source_with_environment_and_features(
+        &source,
+        &file_name,
+        &annotations,
+        Environment::Auto,
+        RtFeatures::default(),
+    );
+    assert!(
+        baseline.is_empty(),
+        "expected predicate congruence witness to verify, got {baseline:#?}"
+    );
+
+    let ablated = checker::check_source_with_environment_and_features(
+        &source,
+        &file_name,
+        &annotations,
+        Environment::Auto,
+        RtFeatures::default().without(RtAblation::AbstractPredicateCongruence),
+    );
+    assert!(
+        ablated
+            .iter()
+            .any(|error| error.message.contains("Return value")),
+        "expected congruence ablation to reject the witness, got {ablated:#?}"
+    );
 }
 
 #[test]
