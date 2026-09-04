@@ -248,32 +248,10 @@ impl LibraryRegistry {
         self.globals.iter().map(|(name, ty)| (name.as_str(), ty))
     }
 
-    pub fn static_functions(&self) -> impl Iterator<Item = (&str, &[FunctionSignature])> {
-        self.static_functions
-            .iter()
-            .map(|(name, overloads)| (name.as_str(), overloads.as_slice()))
-    }
-
     pub fn modules(&self) -> impl Iterator<Item = (&str, &LibraryModule)> {
         self.modules
             .iter()
             .map(|(name, module)| (name.as_str(), module))
-    }
-
-    pub fn receiver_methods(&self) -> impl Iterator<Item = (&str, &str, &[FunctionSignature])> {
-        self.receiver_methods.iter().map(|(key, overloads)| {
-            (
-                key.receiver.as_str(),
-                key.member.as_str(),
-                overloads.as_slice(),
-            )
-        })
-    }
-
-    pub fn receiver_properties(&self) -> impl Iterator<Item = (&str, &str, &RefinementType)> {
-        self.receiver_properties
-            .iter()
-            .map(|(key, property)| (key.receiver.as_str(), key.member.as_str(), property))
     }
 
     pub(crate) fn add_global(&mut self, name: &str, ty: RefinementType) {
