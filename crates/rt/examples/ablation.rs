@@ -178,12 +178,12 @@ fn main() -> Result<(), String> {
         .and_then(|value| value.parse().ok())
         .unwrap_or(3);
     let baseline_features = RtFeatures::default();
-    let baseline = evaluate("fixedpoint+smt-fallback", &cases, baseline_features, rounds);
-    let direct = evaluate(
-        "direct-smt",
+    let baseline = evaluate("direct-smt (production)", &cases, baseline_features, rounds);
+    let fixedpoint = evaluate(
+        "fixedpoint+smt-fallback (legacy)",
         &cases,
         RtFeatures {
-            constraint_solver: ConstraintSolver::DirectSmt,
+            constraint_solver: ConstraintSolver::FixedpointWithSmtFallback,
             ..baseline_features
         },
         rounds,
@@ -212,7 +212,7 @@ fn main() -> Result<(), String> {
     println!("|---|---:|---:|---:|---:|---:|");
     for run in [
         &baseline,
-        &direct,
+        &fixedpoint,
         &no_int_conversion_axioms,
         &no_abstract_predicate_congruence,
     ] {
@@ -227,7 +227,7 @@ fn main() -> Result<(), String> {
         );
     }
     for run in [
-        &direct,
+        &fixedpoint,
         &no_int_conversion_axioms,
         &no_abstract_predicate_congruence,
     ] {

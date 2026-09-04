@@ -182,8 +182,8 @@ struct FixpointConstraint<'a> {
 /// Constraint backend selector used by the ablation runner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConstraintSolver {
-    #[default]
     FixedpointWithSmtFallback,
+    #[default]
     DirectSmt,
 }
 
@@ -7197,10 +7197,7 @@ mod ablation_tests {
     #[test]
     fn defaults_keep_all_verifier_features_enabled() {
         let features = RtFeatures::default();
-        assert_eq!(
-            features.constraint_solver,
-            ConstraintSolver::FixedpointWithSmtFallback
-        );
+        assert_eq!(features.constraint_solver, ConstraintSolver::DirectSmt);
         assert!(features.int_conversion_axioms);
         assert!(features.abstract_predicate_congruence);
     }

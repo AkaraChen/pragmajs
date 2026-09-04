@@ -160,9 +160,10 @@ bodies are analyzed in evaluation order, including sequence expressions, so
 side effects cannot disappear merely because they occur inside a callback
 return expression.
 
-If the Z3 fixedpoint engine returns `unknown`, refinejs attempts the SMT
-fallback. If the proof result is still unknown, the obligation is rejected; an
-unknown solver result is never treated as proof.
+The production verifier sends each preprocessed implication directly to Z3
+SMT; only `unsat` counts as proof. The former Fixedpoint-plus-SMT path remains
+available only as an explicit ablation backend. An `unknown` result rejects the
+obligation and is never treated as proof.
 
 ## Provenance model and the three final fixes
 

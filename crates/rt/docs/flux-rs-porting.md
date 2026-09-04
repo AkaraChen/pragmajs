@@ -138,11 +138,12 @@ Flux writes `if a < b { a } else { b }` as an index. refinejs has no
 Rust `bool` bitwise `|` is JS `||` in the port. Bitwise and shift functions
 in `binop.rs` stay skipped (integer overflow / bitvector territory).
 
-### Solver policy is unchanged
+### Solver policy after ablation
 
-Fixedpoint `Sat` is a counterexample. `Unsat` / `Unknown` is confirmed with
-SMT. Only SMT `Unsat` is a proof. Binding identity (`Same`) uses SMT
-equality; JS `===` on `Number` uses IEEE `eq_fpa`.
+Production checks the preprocessed implication directly with SMT, and only SMT
+`Unsat` is a proof. The former Fixedpoint-first policy remains selectable as a
+legacy differential backend. Binding identity (`Same`) uses SMT equality; JS
+`===` on `Number` uses IEEE `eq_fpa`.
 
 ### Ownership is not welded on
 
